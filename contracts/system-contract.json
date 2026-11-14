@@ -1,0 +1,33 @@
+{
+  "system_contract": {
+    "version": "1.0",
+    "entities": {
+      "user": {
+        "id": "UUID", "nome": "String", "email": "String", "password_hash": "String",
+        "role": "Enum ['admin', 'aluno']", "status": "Enum ['ativo', 'inativo', 'inadimplente']", "created_at": "Timestamp"
+      },
+      "aluno_profile": {
+        "user_id": "UUID (FK)", "modalidade": "Enum ['boxe', 'jiu_jitsu', 'muay_thai']", "faixa": "String",
+        "graduacao_nivel": "Integer", "total_presencas": "Integer", "data_matricula": "Date"
+      },
+      "financeiro": {
+        "payment_id": "UUID", "user_id": "UUID (FK)", "valor": "Decimal", "data_vencimento": "Date",
+        "data_pagamento": "Date | null", "status": "Enum ['pendente', 'pago', 'atrasado']", "metodo_pagamento": "String"
+      },
+      "loja_venda": {
+        "sale_id": "UUID", "user_id": "UUID (FK)", "product_id": "UUID (FK)", "quantidade": "Integer",
+        "valor_total": "Decimal", "data_venda": "Timestamp"
+      },
+      "inventory_product": {
+        "product_id": "UUID", "nome": "String", "preco": "Decimal", "estoque_atual": "Integer", "categoria": "String"
+      },
+      "cash_flow": {
+        "transaction_id": "UUID", "tipo": "Enum ['entrada', 'saida']", "valor": "Decimal", "motivo": "String",
+        "categoria": "Enum ['mensalidade', 'loja', 'sangria', 'outros']", "data": "Timestamp"
+      },
+      "attendance": {
+        "attendance_id": "UUID", "user_id": "UUID (FK)", "check_in": "Timestamp", "check_out": "Timestamp | null"
+      }
+    }
+  }
+}

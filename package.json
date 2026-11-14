@@ -1,0 +1,55 @@
+{
+  "name": "figma-make-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "pnpm run typecheck && vite build && pnpm run build:api",
+    "build:api": "tsup apps/api/src/server.ts apps/api/src/migrate.ts apps/api/src/bootstrap-admin.ts apps/api/src/jobs/diario.ts --format esm --target node22 --out-dir apps/api/dist --clean",
+    "typecheck": "tsc --noEmit && tsc -p apps/api/tsconfig.json",
+    "dev:api": "tsx watch --env-file=.env apps/api/src/server.ts",
+    "start": "node apps/api/dist/server.js",
+    "db:migrate": "node apps/api/dist/migrate.js",
+    "admin:create": "node apps/api/dist/bootstrap-admin.js",
+    "job:daily": "node apps/api/dist/jobs/diario.js",
+    "test": "vitest run",
+    "audit:queries": "node scripts/query-audit.mjs",
+    "preview": "vite preview",
+    "format": "oxfmt"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.0.1",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/static": "^10.1.11",
+    "@node-rs/argon2": "^2.0.2",
+    "fastify": "^5.6.0",
+    "jose": "^6.1.0",
+    "lucide-react": "^1.73.0",
+    "pg": "^8.16.3",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "oxfmt": "^0.76.0",
+    "tailwindcss": "^4.0.0",
+    "tsup": "^9.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": "^22.18.0 || ^24.11.0 || >=26.0.0"
+  },
+  "packageManager": "pnpm@10.34.3"
+}

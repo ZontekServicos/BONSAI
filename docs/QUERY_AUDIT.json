@@ -1,0 +1,37 @@
+[
+  {
+    "query": "presentes",
+    "planning_ms": 1.492,
+    "execution_ms": 0.117,
+    "indexes": [
+      "ix_attendance_presentes",
+      "aluno_profile_pkey",
+      "users_pkey"
+    ]
+  },
+  {
+    "query": "pendencias",
+    "planning_ms": 0.955,
+    "execution_ms": 0.023,
+    "indexes": [
+      "uq_financeiro_competencia"
+    ]
+  },
+  {
+    "query": "busca",
+    "planning_ms": 0.218,
+    "execution_ms": 0.08,
+    "indexes": [
+      "ix_users_nome_search",
+      "ix_users_email_search"
+    ]
+  },
+  {
+    "query": "caixa",
+    "planning_ms": 0.886,
+    "execution_ms": 0.09,
+    "indexes": [
+      "ix_cash_flow_type_data"
+    ]
+  }
+]

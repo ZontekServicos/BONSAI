@@ -1,0 +1,12 @@
+{
+  "title": "Fight Control · Bonsai",
+  "language": "pt-BR",
+  "description": "Gestão de alunos, presenças, graduações, estoque e finanças da academia.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
