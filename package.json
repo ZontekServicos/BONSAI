@@ -12,6 +12,7 @@
     "start": "node apps/api/dist/server.js",
     "db:migrate": "node apps/api/dist/migrate.js",
     "admin:create": "node apps/api/dist/bootstrap-admin.js",
+    "demo:seed": "tsx --env-file=.env apps/api/src/seed-demo.ts",
     "job:daily": "node apps/api/dist/jobs/diario.js",
     "test": "vitest run",
     "audit:queries": "node scripts/query-audit.mjs",

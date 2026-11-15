@@ -22,7 +22,18 @@ node --env-file=.env apps/api/dist/migrate.js
 pnpm.cmd run dev:api
 ```
 
-O Vite existente continua em 8443 e encaminha `/api` para `localhost:3001`. Se não estiver rodando, `pnpm.cmd dev`. Não configure `VITE_API_URL` no desenvolvimento com proxy. Não use contas de demonstração: crie o primeiro administrador pelo procedimento de operação.
+O Vite existente continua em 8443 e encaminha `/api` para `localhost:3001`. Se não estiver rodando, `pnpm.cmd dev`. Não configure `VITE_API_URL` no desenvolvimento com proxy. Em produção, crie o primeiro administrador pelo procedimento de operação.
+
+### Contas de demonstração (somente desenvolvimento)
+
+Para testar o controle de acesso, `pnpm demo:seed` cria (ou redefine) duas contas reais no banco do `.env`:
+
+| Perfil | E-mail | Senha |
+|---|---|---|
+| Professor (admin) | `professor@bonsai.demo` | `Bonsai@Professor2026` |
+| Aluno | `aluno@bonsai.demo` | `Bonsai@Aluno2026` |
+
+Com `VITE_DEMO_LOGIN=true` no `.env`, a tela de login mostra os botões **Professor** e **Aluno** no `vite dev`. O login passa pela API normal (Argon2id + JWT + RBAC). O script recusa `NODE_ENV=production` e fica fora do `build:api`. Os botões e as credenciais são removidos do bundle em `vite build`, mesmo com a flag ligada.
 
 ## Verificação
 

@@ -1,5 +1,18 @@
-@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Barlow+Condensed:wght@600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Barlow+Condensed:ital,wght@0,600;0,700;0,800;1,700;1,800;1,900&display=swap");
 @import "tailwindcss";
+
+/* Identidade BONSAI — Jiu Jitsu Fight.
+   Cada --color-* vira utilitário: bg-bonsai-ink, text-bonsai-ember, border-bonsai-red/40… */
+@theme {
+  --color-bonsai-ink: #0a0a0a; /* fundo preto profundo */
+  --color-bonsai-coal: #121212; /* superfícies elevadas */
+  --color-bonsai-red: #b22222; /* ação primária (vermelho sangue) */
+  --color-bonsai-red-bright: #d0312d; /* topo do gradiente do botão / hover */
+  --color-bonsai-red-deep: #6e1010; /* sombras e contornos */
+  --color-bonsai-ember: #ef4f4f; /* vermelho para TEXTO sobre preto (contraste 5.6:1) */
+  --color-bonsai-paper: #ece3d3; /* creme do emblema */
+  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+}
 
 :root {
   font-family: "Archivo", sans-serif;
@@ -38,12 +51,7 @@
     cursor: pointer;
   }
 }
-.startup {
-  min-height: 100vh;
-  display: grid;
-  place-content: center;
-  gap: 24px;
-}
+
 .workspace-card {
   margin: 22px 0;
 }
@@ -141,12 +149,7 @@
   border-radius: 8px;
   overflow: hidden;
 }
-.login-help {
-  margin-top: 24px;
-  color: var(--muted);
-  line-height: 1.6;
-  font-size: 13px;
-}
+
 .metric > strong {
   display: block;
   margin-top: 15px;
@@ -176,57 +179,6 @@
     flex-wrap: wrap;
   }
 }
-.login {
-  display: grid;
-  min-height: 100vh;
-  grid-template-columns: minmax(0, 1.18fr) minmax(420px, 0.82fr);
-  background: #111310;
-}
-.login-art {
-  position: relative;
-  display: flex;
-  overflow: hidden;
-  flex-direction: column;
-  justify-content: center;
-  padding: clamp(48px, 8vw, 120px);
-  color: #f7f8f2;
-  isolation: isolate;
-}
-.login-art:before {
-  position: absolute;
-  z-index: -2;
-  inset: 0;
-  background:
-    radial-gradient(circle at 66% 37%, #dfff4333, transparent 25%),
-    linear-gradient(135deg, #242822, #111310 65%);
-  content: "";
-}
-.login-art:after {
-  position: absolute;
-  z-index: -1;
-  top: -20%;
-  right: -20%;
-  width: 70%;
-  aspect-ratio: 1;
-  border: 1px solid #dfff434d;
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 80px #ffffff05,
-    0 0 0 160px #ffffff04;
-  content: "";
-}
-.grid-lines {
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  opacity: 0.11;
-  background-image:
-    linear-gradient(#ffffff24 1px, transparent 1px),
-    linear-gradient(90deg, #ffffff24 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: linear-gradient(to right, #000, transparent 82%);
-}
-.eyebrow,
 .card-head > div > span,
 .progress > span,
 .modal header span {
@@ -235,181 +187,16 @@
   font-weight: 800;
   letter-spacing: 0.17em;
 }
-.eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--lime);
-}
-.eyebrow:before {
-  width: 30px;
-  height: 2px;
-  background: currentColor;
-  content: "";
-}
-.login-art h1 {
-  max-width: 780px;
-  margin: 25px 0 22px;
-  font: 800 clamp(66px, 8vw, 124px)/0.78 "Barlow Condensed";
-  letter-spacing: -0.045em;
-  text-transform: uppercase;
-}
-.login-art h1 em {
-  color: var(--lime);
-  font-style: normal;
-}
-.art-copy {
-  max-width: 470px;
-  color: #aeb3aa;
-  font-size: 14px;
-  line-height: 1.8;
-}
-.art-stat {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-top: 52px;
-}
-.art-stat strong {
-  font: 800 37px "Barlow Condensed";
-}
-.art-stat span {
-  max-width: 150px;
-  color: #888e84;
-  font-size: 10px;
-  line-height: 1.4;
-  text-transform: uppercase;
-}
-.art-seal {
-  position: absolute;
-  right: 8%;
-  bottom: 8%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: #8c9288;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  transform: rotate(-6deg);
-}
-.art-seal svg {
-  color: var(--lime);
-}
-.art-seal i {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--lime);
-}
-.login-panel {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  padding: 42px clamp(32px, 6vw, 92px) 24px;
-  background: #f7f8f3;
-}
-.login-inner {
-  width: 100%;
-  max-width: 410px;
-  margin: auto 0;
-}
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font: 800 21px "Barlow Condensed";
-  letter-spacing: -0.02em;
-}
-.brand > b {
-  display: grid;
-  width: 43px;
-  height: 43px;
-  place-items: center;
-  border-radius: 11px;
-  color: #171a15;
-  background: var(--lime);
-}
-.brand em {
-  color: #95aa14;
-  font-style: normal;
-}
-.brand.compact {
-  gap: 8px;
-  font-size: 18px;
-}
-.brand.compact b {
-  width: 35px;
-  height: 35px;
-  border-radius: 9px;
-}
-.login-heading {
-  margin: 60px 0 34px;
-}
-.login-heading > span {
-  color: #82920e;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-.login-heading h2 {
-  margin: 8px 0 6px;
-  font: 800 42px/1 "Barlow Condensed";
-  letter-spacing: -0.03em;
-  text-transform: uppercase;
-}
-.login-heading p,
 .page-header p {
   color: var(--muted);
   font-size: 12px;
 }
-.login-form {
-  display: grid;
-  gap: 18px;
-}
-.login-form label,
+
 .modal-fields label {
   color: #545852;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
-}
-.field {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 53px;
-  margin-top: 8px;
-  padding: 0 15px;
-  border: 1px solid #d9ddd4;
-  border-radius: 10px;
-  color: #9a9f96;
-  background: #fff;
-  transition: 0.16s;
-}
-.field:focus-within {
-  border-color: #a7bb28;
-  box-shadow: 0 0 0 3px #b5cf231f;
-}
-.field input {
-  min-width: 0;
-  flex: 1;
-  border: 0;
-  outline: 0;
-  color: var(--ink);
-  background: transparent;
-  font-size: 12px;
-}
-.field button {
-  display: grid;
-  padding: 4px;
-  place-items: center;
-  border: 0;
-  color: #91978d;
-  background: transparent;
 }
 .primary,
 .secondary {
@@ -431,45 +218,11 @@
   box-shadow: 0 8px 25px #aac61442;
   transform: translateY(-1px);
 }
-.login-form .primary {
-  width: 100%;
-  margin-top: 4px;
-}
+
 .error {
   margin: -5px 0;
   color: #a63232;
   font-size: 10px;
-}
-.demo {
-  padding-top: 30px;
-  text-align: center;
-}
-.demo > span {
-  color: #a0a59c;
-  font-size: 9px;
-  text-transform: uppercase;
-}
-.demo > div {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 10px;
-}
-.demo button {
-  padding: 7px 12px;
-  border: 1px solid #dce0d7;
-  border-radius: 999px;
-  color: #676c64;
-  background: transparent;
-  font-size: 9px;
-  font-weight: 700;
-}
-.demo button:hover {
-  border-color: #a4b72c;
-}
-.login-panel > small {
-  color: #a4a9a0;
-  font-size: 8px;
 }
 .app {
   display: flex;
@@ -968,9 +721,7 @@ tbody tr:hover {
   font-weight: 800;
   letter-spacing: 0.16em;
 }
-.member-top .brand > span {
-  color: #fff;
-}
+
 .member-main {
   justify-content: flex-start;
   gap: 18px;
@@ -1277,18 +1028,6 @@ tbody tr:hover {
   background: transparent;
 }
 @media (max-width: 950px) {
-  .login {
-    grid-template-columns: 0.8fr minmax(420px, 1fr);
-  }
-  .login-art {
-    padding: 48px;
-  }
-  .login-art h1 {
-    font-size: 72px;
-  }
-  .art-seal {
-    display: none;
-  }
   .sidebar {
     transform: translateX(-100%);
     transition: 0.22s;
@@ -1324,19 +1063,6 @@ tbody tr:hover {
   }
 }
 @media (max-width: 720px) {
-  .login {
-    display: block;
-    background: #f7f8f3;
-  }
-  .login-art {
-    display: none;
-  }
-  .login-panel {
-    padding: 28px 24px 20px;
-  }
-  .login-heading {
-    margin-top: 54px;
-  }
   .page {
     padding: 26px 16px 40px;
   }
