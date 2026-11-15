@@ -1,0 +1,97 @@
+name: Codex Security PR
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # Superseded code scans share one group. A title/body edit must not cancel it.
+  group: codex-security-pr-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && github.event.changes.base == null && 'metadata' || 'scan' }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    # Never pass the API credential to code from a fork. The required gate fails
+    # on skipped scans so that a fork cannot merge without an approved review.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'edited' || github.event.changes.base != null)
+    name: Scan repository
+    # Store the key ONLY in this Environment, with required reviewers and
+    # self-review/bypass disabled. CODEOWNERS alone does not protect PR secrets.
+    environment: codex-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      scan-status: ${{ steps.scan.outputs.scan-status }}
+      policy-status: ${{ steps.scan.outputs.policy-status }}
+      report-status: ${{ steps.scan.outputs.report-status }}
+      scanned-sha: ${{ steps.scan.outputs.scanned-sha }}
+    steps:
+      - &verify-current-pr
+        name: Verify the current PR revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          current=$(gh api --hostname "${GITHUB_SERVER_URL#https://}" "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '[.head.sha, .base.ref, .state] | @tsv')
+          expected=$(printf '%s\t%s\topen' "$PR_HEAD_SHA" "$PR_BASE_REF")
+          if [ "$current" != "$expected" ]; then
+            echo 'The PR changed or closed. Run the workflow for the current revision.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      # Run before any repository scripts or dependency installation. ERP tests
+      # run independently in ci.yml without the scanner's API credential.
+      - name: Scan the complete PR head
+        id: scan
+        uses: openai/codex-security@a98b35d7eef9f85c298c86229445bb64ac427aaf # action-v0.9.1
+        with:
+          scope: repository
+          mode: standard
+          model: gpt-5.6-sol
+          cyber-access-program: standard
+          effort: xhigh
+          # Advisory estimate; project-level controls must bound actual usage.
+          max-cost: ${{ vars.CODEX_SECURITY_PR_MAX_COST || '5' }}
+          fail-on-severity: high
+          verbose: false
+          summary: true
+          annotations: true
+          upload-artifacts: false
+        env:
+          OPENAI_API_KEY: ${{ secrets.CODEX_SECURITY_API_KEY }}
+
+  required-review:
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && 'metadata / ' || '' }}Codex Security / main
+    needs: security
+    if: always() && (github.event.action != 'edited' || github.event.changes.base != null)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - *verify-current-pr
+      - name: Require a completed scan of this revision
+        env:
+          SCAN_JOB_RESULT: ${{ needs.security.result }}
+          SCAN_STATUS: ${{ needs.security.outputs.scan-status }}
+          POLICY_STATUS: ${{ needs.security.outputs.policy-status }}
+          REPORT_STATUS: ${{ needs.security.outputs.report-status }}
+          SCANNED_SHA: ${{ needs.security.outputs.scanned-sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$SCAN_JOB_RESULT" = success
+          test "$SCAN_STATUS" = completed
+          test "$POLICY_STATUS" = passed
+          test "$REPORT_STATUS" = ready
+          test "$SCANNED_SHA" = "$EXPECTED_SHA"

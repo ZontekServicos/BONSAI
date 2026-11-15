@@ -1,0 +1,113 @@
+﻿{
+    "schema_version":  1,
+    "source":  "Codex Security 0.10.0",
+    "scan_id":  "75905a85-e57d-4cb0-8aee-9573dc0ded75",
+    "scan_status":  "failed",
+    "complete":  false,
+    "note":  "Preserved candidates from an interrupted Deep Scan. Locations refer to the pre-patch snapshot; this is not a clean final report.",
+    "findings":  [
+                     {
+                         "id":  "cand-pr-secret-exposure",
+                         "occurrence_id":  "occ_5b519495c7d3469f99b2f30b",
+                         "title":  "A same-repository PR author can expose the Codex Security API key by editing the workflow",
+                         "severity":  "high",
+                         "confidence":  "medium",
+                         "summary":  "A collaborator who can push a branch in the repository can modify the `pull_request` workflow in that branch and open or update a PR. The fork-only gate passes for that branch, and the resulting workflow run makes the reusable `CODEX_SECURITY_API_KEY` available before a trusted reviewer approves the workflow change.",
+                         "locations":  [
+                                           {
+                                               "path":  ".github/workflows/codex-security.yml",
+                                               "startLine":  3,
+                                               "endLine":  6
+                                           },
+                                           {
+                                               "path":  ".github/workflows/codex-security.yml",
+                                               "startLine":  18,
+                                               "endLine":  22
+                                           },
+                                           {
+                                               "path":  ".github/workflows/codex-security.yml",
+                                               "startLine":  53,
+                                               "endLine":  68
+                                           }
+                                       ],
+                         "remediation":  "Run the credentialed scan from a workflow definition that PR authors cannot modify before execution. Use a protected environment with required reviewer approval, or a carefully constrained base-branch-controlled `pull_request_target`/external dispatcher that checks out the PR only as data and invokes only the pinned scanner—never repository scripts. Keep fork and same-repository contributor trust policies explicit, and scope the API key to the minimum project and budget.",
+                         "validation":  {
+                                            "assertions":  [
+                                                               "A collaborator who can push a repository branch satisfies `head.repo.full_name == github.repository`.",
+                                                               "The eligible PR job receives `secrets.CODEX_SECURITY_API_KEY`.",
+                                                               "Editing the workflow in the PR can redirect the secret before the change is merged to the protected branch."
+                                                           ],
+                                            "counterEvidence":  [
+                                                                    "The referenced checkout and scanner actions are pinned, repository scripts are not executed before scanning, and checkout does not persist its Git credential.",
+                                                                    "Fork pull requests are excluded.",
+                                                                    "The current documentation says the workflow, repository secret, and remote protection settings had not yet been activated."
+                                                                ],
+                                            "evidenceRefs":  [
+                                                                 "pr-trigger",
+                                                                 "fork-only-gate",
+                                                                 "scanner-secret"
+                                                             ],
+                                            "limitations":  [
+                                                                "The review could not inspect live GitHub Actions permissions, protected-environment approval rules, or the OpenAI API key\u0027s project scope and budget."
+                                                            ],
+                                            "method":  "Static workflow trust-boundary trace",
+                                            "status":  "reportable",
+                                            "summary":  "The PR event admits same-repository heads, the only explicit trust check rejects forks, and the admitted job receives a reusable repository secret. Review and CODEOWNER requirements described for merge do not occur before the PR workflow run."
+                                        }
+                     },
+                     {
+                         "id":  "cand-pr-scan-concurrency",
+                         "occurrence_id":  "occ_6eea963af3379c740d911d71",
+                         "title":  "Repeated PR updates can run overlapping hour-long security scans",
+                         "severity":  "medium",
+                         "confidence":  "medium",
+                         "summary":  "A same-repository PR author can push commits repeatedly and start a new credentialed security scan for every `synchronize` event. Because the concurrency group contains the per-run `github.run_id`, no two runs share a group and `cancel-in-progress` never cancels the superseded scans.",
+                         "locations":  [
+                                           {
+                                               "path":  ".github/workflows/codex-security.yml",
+                                               "startLine":  3,
+                                               "endLine":  6
+                                           },
+                                           {
+                                               "path":  ".github/workflows/codex-security.yml",
+                                               "startLine":  12,
+                                               "endLine":  14
+                                           },
+                                           {
+                                               "path":  ".github/workflows/codex-security.yml",
+                                               "startLine":  23,
+                                               "endLine":  25
+                                           },
+                                           {
+                                               "path":  ".github/workflows/codex-security.yml",
+                                               "startLine":  53,
+                                               "endLine":  68
+                                           }
+                                       ],
+                         "remediation":  "Use a stable concurrency key for the logical PR, for example `codex-security-pr-${{ github.event.pull_request.number }}`, and keep `cancel-in-progress: true`. Do not include `github.run_id` or the head SHA. Add enforceable API-project spend/rate limits and ensure the required-review job accepts results only from the current PR SHA.",
+                         "validation":  {
+                                            "assertions":  [
+                                                               "`github.run_id` is different for each workflow run.",
+                                                               "`cancel-in-progress` only cancels an earlier run in the same concurrency group.",
+                                                               "Each pushed PR commit can create a new group and invoke a full credentialed scan."
+                                                           ],
+                                            "counterEvidence":  [
+                                                                    "Fork PRs do not pass the scan job\u0027s repository-equality gate.",
+                                                                    "GitHub-hosted runner concurrency, organization Actions policies, and OpenAI project budgets/rate limits may constrain the realized impact."
+                                                                ],
+                                            "evidenceRefs":  [
+                                                                 "scan-retrigger",
+                                                                 "unique-concurrency-group",
+                                                                 "hour-scan-job",
+                                                                 "credentialed-scan-operation"
+                                                             ],
+                                            "limitations":  [
+                                                                "No live workflow runs were triggered, and the review did not have access to repository or API-project rate-limit settings."
+                                                            ],
+                                            "method":  "Static GitHub Actions trigger and concurrency trace",
+                                            "status":  "reportable",
+                                            "summary":  "A PR author controls the frequency of `synchronize` events. The group key differs for every resulting run, so older hour-long API scans remain eligible to continue."
+                                        }
+                     }
+                 ]
+}

@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
+import { decodeJwt, SignJWT } from "jose";
 import type { HTTPMethods } from "fastify";
 import { buildApp } from "../src/app.js";
 import { createDatabase, one, type Database } from "../src/db.js";
@@ -112,6 +113,67 @@ afterAll(async () => {
   await cleanup.end();
 });
 describe("authentication and contract", () => {
+  it("rejects expired, forged and wrong-context access JWTs and trusts the database role", async () => {
+    const claims = decodeJwt(studentToken);
+    const key = new TextEncoder().encode(config.JWT_ACCESS_SECRET);
+    const sign = (payload: typeof claims, secret = key, algorithm = "HS256") =>
+      new SignJWT(payload).setProtectedHeader({ alg: algorithm }).sign(secret);
+    const invalid = [
+      await sign({ ...claims, exp: Math.floor(Date.now() / 1000) - 1 }),
+      await sign({ ...claims, aud: "bonsai-reception" }),
+      await sign({ ...claims, iss: "untrusted-issuer" }),
+      await sign({ ...claims, typ: "carteirinha" }),
+      await sign(claims, new TextEncoder().encode("wrong-signing-key".repeat(4))),
+      await sign(claims, key, "HS384"),
+    ];
+    for (const token of invalid)
+      expect((await request("GET", "/auth/me", undefined, token)).statusCode).toBe(401);
+    const forgedRole = await sign({ ...claims, role: "admin" });
+    expect((await request("GET", "/dashboard", undefined, forgedRole)).statusCode).toBe(403);
+    expect((await request("GET", "/auth/me", undefined, forgedRole)).json().user.role).toBe(
+      "aluno",
+    );
+  });
+  it("denies student access across administrative modules and other-student graduation history", async () => {
+    for (const path of [
+      "/alunos",
+      "/presencas",
+      "/presencas/ativas",
+      `/alunos/${other}/graduacoes`,
+    ])
+      expect((await request("GET", path, undefined, studentToken)).statusCode).toBe(403);
+    for (const path of ["/alunos", "/presencas/check-in", "/carteirinha/validar", "/produtos"])
+      expect((await request("POST", path, {}, studentToken)).statusCode).toBe(403);
+    // Extra query parameters cannot switch the identity used by self-service routes.
+    expect(
+      (await request("GET", `/me/mensalidades?user_id=${other}`, undefined, studentToken))
+        .statusCode,
+    ).toBe(400);
+  });
+  it("requires the exact browser origin for cookie operations and sends protective headers", async () => {
+    for (const path of ["/auth/refresh", "/auth/logout"])
+      for (const untrusted of ["null", "https://attacker.test", `${origin}.attacker.test`])
+        expect((await request("POST", path, undefined, "", { origin: untrusted })).statusCode).toBe(
+          403,
+        );
+    const missingOrigin = await app.inject({ method: "POST", url: "/api/v1/auth/refresh" });
+    expect(missingOrigin.statusCode).toBe(403);
+    const response = await request("GET", "/auth/me", undefined, studentToken);
+    expect(response.headers["access-control-allow-origin"]).toBe(origin);
+    expect(response.headers["access-control-allow-credentials"]).toBe("true");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+    const login = await request(
+      "POST",
+      "/auth/login",
+      { email: "student@example.test", password },
+      "",
+    );
+    expect(login.headers["set-cookie"]).toContain("HttpOnly");
+    expect(login.headers["set-cookie"]).toContain("SameSite=Strict");
+    expect(login.headers["set-cookie"]).toContain("Path=/api/v1/auth");
+  });
   it("never exposes password hashes and preserves dates, UUIDs and decimal strings", async () => {
     const me = await request("GET", "/auth/me", undefined, studentToken);
     expect(me.statusCode).toBe(200);
