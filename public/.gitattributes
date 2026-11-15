@@ -1,2 +1,5 @@
 # AgentPlat packages this default favicon directly from source without LFS hydration.
 favicon.png -filter -diff -merge -text
+# Logos servidas pelo app: o build do Railway/AgentPlat não baixa objetos LFS,
+# então precisam ser blobs Git normais (senão o deploy publica o ponteiro de texto).
+assets/** -filter -diff -merge -text

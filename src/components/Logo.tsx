@@ -51,18 +51,22 @@ export function Logo({
   className?: string;
 }) {
   const iconOnly = variant === "icon" || collapsed;
-  const src = variant === "full" ? LOGO_SRC.full : variant === "compact" ? LOGO_SRC.mobile : LOGO_SRC.icon;
+  // Se o PNG não carregar, some com o emblema em vez de exibir um anel vazio.
+  const [broken, setBroken] = useState(false);
+  const src =
+    variant === "full" ? LOGO_SRC.full : variant === "compact" ? LOGO_SRC.mobile : LOGO_SRC.icon;
 
   return (
     <span
       className={`inline-flex items-center ${stacked ? "flex-col gap-4 text-center" : "gap-3"} ${className}`}
     >
       <span className="sr-only">Bonsai Jiu Jitsu Fight</span>
-      <picture className="block shrink-0" aria-hidden="true">
-        {variant === "responsive" && !collapsed && [
-          <source key="lg" media="(min-width: 1024px)" srcSet={LOGO_SRC.full} />,
-          <source key="sm" media="(min-width: 360px)" srcSet={LOGO_SRC.mobile} />,
-        ]}
+      <picture className={`shrink-0 ${broken ? "hidden" : "block"}`} aria-hidden="true">
+        {variant === "responsive" &&
+          !collapsed && [
+            <source key="lg" media="(min-width: 1024px)" srcSet={LOGO_SRC.full} />,
+            <source key="sm" media="(min-width: 360px)" srcSet={LOGO_SRC.mobile} />,
+          ]}
         <img
           key="img"
           src={collapsed ? LOGO_SRC.icon : src}
@@ -72,7 +76,8 @@ export function Logo({
           decoding="async"
           fetchPriority={priority ? "high" : "auto"}
           draggable={false}
-          className={`${collapsed ? "size-10" : EMBLEM_SIZE[variant]} rounded-full object-contain ring-1 ring-bonsai-paper/25 drop-shadow-[0_6px_18px_rgb(178_34_34/0.35)] transition-[width,height] duration-300`}
+          onError={() => setBroken(true)}
+          className={`${collapsed ? "size-10" : EMBLEM_SIZE[variant]} aspect-square max-w-none rounded-full object-contain ring-1 ring-bonsai-paper/25 drop-shadow-[0_6px_18px_rgb(178_34_34/0.35)] transition-[width,height] duration-300`}
         />
       </picture>
       {variant !== "icon" && (

@@ -12,7 +12,17 @@
   --color-bonsai-ember: #ef4f4f; /* vermelho para TEXTO sobre preto (contraste 5.6:1) */
   --color-bonsai-paper: #ece3d3; /* creme do emblema */
   --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --animate-alert-in: alert-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  @keyframes alert-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
 }
+
+/* Telas baixas (iPhone SE/8, paisagem): compacta o ritmo vertical. Uso: short:mt-4 */
+@custom-variant short (@media (max-height: 720px));
 
 :root {
   font-family: "Archivo", sans-serif;
