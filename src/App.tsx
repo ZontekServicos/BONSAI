@@ -35,11 +35,11 @@ import { Member } from "./components/Member";
 // celular (o 100vh do iOS inclui a área sob a barra do navegador e "estoura" a tela).
 const fullHeight = "min-h-screen supports-[height:100svh]:min-h-svh";
 const fieldBox =
-  "flex h-14 short:h-12 items-center gap-3 rounded-2xl border border-bonsai-red/35 bg-bonsai-coal/85 px-4 backdrop-blur-sm text-neutral-500 transition " +
-  "hover:border-bonsai-red/60 focus-within:border-bonsai-red focus-within:bg-bonsai-red/[0.06] focus-within:text-white " +
-  "focus-within:ring-4 focus-within:ring-bonsai-red/20 has-[input:disabled]:opacity-60";
+  "flex h-14 short:h-12 items-center gap-3 rounded-2xl border border-border-strong bg-surface/85 px-4 backdrop-blur-sm text-text-muted transition " +
+  "hover:border-text-muted focus-within:border-primary focus-within:bg-surface-raised focus-within:text-text-main " +
+  "focus-within:ring-4 focus-within:ring-primary/25 has-[input:disabled]:opacity-60";
 const fieldInput =
-  "h-full min-w-0 flex-1 bg-transparent text-base text-white placeholder:text-neutral-500 focus-visible:outline-none";
+  "h-full min-w-0 flex-1 bg-transparent text-base text-text-main placeholder:text-text-muted focus-visible:outline-none";
 
 function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: string }) {
   const [busy, setBusy] = useState(false);
@@ -77,14 +77,14 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
   }
   return (
     <main
-      className={`relative isolate flex flex-col overflow-x-clip bg-bonsai-ink text-white lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(440px,0.9fr)] ${fullHeight}`}
+      className={`relative isolate flex flex-col overflow-x-clip bg-background text-text-main lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(440px,0.9fr)] ${fullHeight}`}
     >
       {/* Arte: fundo esmaecido no mobile, coluna-herói no desktop */}
       <section
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[78vh] overflow-hidden lg:relative lg:z-0 lg:flex lg:h-auto lg:flex-col lg:items-center lg:justify-center lg:gap-[4vh] lg:p-10"
       >
-        <div className="absolute -top-1/4 -right-1/3 size-[130vw] rounded-full bg-[radial-gradient(circle,rgb(178_34_34/0.45),transparent_62%)] lg:inset-auto lg:top-1/2 lg:left-1/2 lg:size-[70vmin] lg:-translate-1/2" />
+        <div className="absolute -top-1/4 -right-1/3 size-[130vw] rounded-full bg-[radial-gradient(circle,color-mix(in_srgb,var(--color-primary)_35%,transparent),transparent_62%)] lg:inset-auto lg:top-1/2 lg:left-1/2 lg:size-[70vmin] lg:-translate-1/2" />
         {/* Mobile carrega a arte de 512px (~380 KB); só o desktop baixa a de 1024px. */}
         <picture>
           <source media="(min-width: 1024px)" srcSet={LOGO_SRC.full} />
@@ -96,26 +96,26 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
             fetchPriority="high"
             draggable={false}
             onError={(e) => (e.currentTarget.style.display = "none")}
-            className="absolute -top-[4vh] -right-[30vw] aspect-square w-[100vw] max-w-none object-contain opacity-40 sm:-right-[12vw] sm:w-[70vw] lg:static lg:w-[min(38vw,32rem,56vh)] lg:opacity-100 lg:drop-shadow-[0_20px_60px_rgb(178_34_34/0.35)]"
+            className="absolute -top-[4vh] -right-[30vw] aspect-square w-[100vw] max-w-none object-contain opacity-40 sm:-right-[12vw] sm:w-[70vw] lg:static lg:w-[min(38vw,32rem,56vh)] lg:opacity-100 lg:drop-shadow-[0_20px_60px_color-mix(in_srgb,var(--color-primary)_30%,transparent)]"
           />
         </picture>
-        <div className="absolute inset-0 bg-linear-to-b from-bonsai-ink/10 via-bonsai-ink/70 to-bonsai-ink lg:hidden" />
+        <div className="absolute inset-0 bg-linear-to-b from-background/10 via-background/70 to-background lg:hidden" />
         <div className="relative hidden flex-col items-center gap-5 lg:flex">
           <Wordmark stacked className="text-[clamp(20px,3.6vh,34px)]" />
-          <p className="flex items-center gap-3 text-xs font-semibold tracking-[0.35em] text-neutral-400 uppercase">
-            Disciplina <i className="size-1 rounded-full bg-bonsai-red" /> Técnica
-            <i className="size-1 rounded-full bg-bonsai-red" /> Respeito
+          <p className="flex items-center gap-3 text-xs font-semibold tracking-[0.35em] text-text-muted uppercase">
+            Disciplina <i className="size-1 rounded-full bg-primary" /> Técnica
+            <i className="size-1 rounded-full bg-primary" /> Respeito
           </p>
         </div>
       </section>
 
       {/* Formulário */}
       <section
-        className={`relative flex flex-1 flex-col px-4 pt-[env(safe-area-inset-top)] pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-8 lg:border-l lg:border-white/5 lg:bg-bonsai-coal/80 lg:px-12 lg:backdrop-blur-sm xl:px-20 ${fullHeight}`}
+        className={`relative flex flex-1 flex-col px-4 pt-[env(safe-area-inset-top)] pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-8 lg:border-l lg:border-border lg:bg-surface/80 lg:px-12 lg:backdrop-blur-sm xl:px-20 ${fullHeight}`}
       >
         <header
           className={`sticky top-0 z-20 -mx-4 shrink-0 px-4 py-3 transition-colors duration-300 sm:-mx-8 sm:px-8 lg:hidden ${
-            scrolled ? "border-b border-white/5 bg-bonsai-ink/85 backdrop-blur-md" : ""
+            scrolled ? "border-b border-border bg-background/85 backdrop-blur-md" : ""
           }`}
         >
           <Logo collapsed={scrolled} priority />
@@ -126,19 +126,19 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
         <div className="flex flex-1 flex-col justify-center-safe py-6 short:py-4">
           <div className="@container mx-auto w-full max-w-md">
             <header>
-              <p className="text-xs font-bold tracking-[0.28em] text-bonsai-ember uppercase">
+              <p className="text-xs font-bold tracking-[0.28em] text-primary-soft uppercase">
                 Bem-vindo de volta
               </p>
               {/* Tamanho pela largura do container (cqi): cabe em 1 linha com a fonte da marca;
                 se ela não carregar, quebra de forma equilibrada em vez de transbordar. */}
-              <h1 className="mt-2 -skew-x-6 font-display text-[clamp(2.1rem,12.5cqi,3.75rem)] leading-[0.9] font-black tracking-tight text-balance uppercase italic [text-shadow:0_3px_0_rgb(0_0_0/0.7)]">
+              <h1 className="mt-2 -skew-x-6 font-display text-[clamp(2.1rem,12.5cqi,3.75rem)] leading-[0.9] font-black tracking-tight text-balance uppercase italic [text-shadow:0_3px_0_color-mix(in_srgb,var(--color-secondary)_70%,transparent)]">
                 Acesse sua conta
               </h1>
               <span
                 aria-hidden="true"
-                className="mt-3 block h-1 w-16 -skew-x-12 rounded-full bg-bonsai-red short:mt-2"
+                className="mt-3 block h-1 w-16 -skew-x-12 rounded-full bg-primary short:mt-2"
               />
-              <p className="mt-3 text-[15px] text-neutral-400 short:mt-2 short:text-sm">
+              <p className="mt-3 text-[15px] text-text-muted short:mt-2 short:text-sm">
                 Entre para gerenciar ou acompanhar sua jornada.
               </p>
             </header>
@@ -149,7 +149,7 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
               onSubmit={submit}
             >
               <label className="block">
-                <span className="mb-2 block text-sm font-semibold text-neutral-100 short:mb-1.5">
+                <span className="mb-2 block text-sm font-semibold text-text-main short:mb-1.5">
                   Usuário
                 </span>
                 <span className={fieldBox}>
@@ -170,7 +170,7 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
               </label>
 
               <label className="block">
-                <span className="mb-2 block text-sm font-semibold text-neutral-100 short:mb-1.5">
+                <span className="mb-2 block text-sm font-semibold text-text-main short:mb-1.5">
                   Senha
                 </span>
                 <span className={fieldBox}>
@@ -190,7 +190,7 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
                     onClick={() => setVisible(!visible)}
                     aria-label={visible ? "Ocultar senha" : "Mostrar senha"}
                     aria-pressed={visible}
-                    className="-mr-2 grid size-10 shrink-0 place-items-center rounded-full text-neutral-400 transition hover:bg-white/5 hover:text-white focus-visible:outline-bonsai-ember"
+                    className="-mr-2 grid size-10 shrink-0 place-items-center rounded-full text-text-muted transition hover:bg-surface-raised hover:text-text-main focus-visible:outline-primary"
                   >
                     {visible ? <EyeOff size={20} /> : <Eye size={20} />}
                   </button>
@@ -200,19 +200,19 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
               {alert && (
                 <div
                   role="alert"
-                  className="flex animate-alert-in items-start gap-3 rounded-2xl border border-bonsai-red/70 bg-bonsai-red-deep/45 px-4 py-3.5 shadow-[inset_3px_0_0_var(--color-bonsai-red),0_10px_30px_-12px_rgb(178_34_34/0.6)] backdrop-blur-sm short:py-3"
+                  className="flex animate-alert-in items-start gap-3 rounded-2xl border border-primary/70 bg-primary-strong/20 px-4 py-3.5 shadow-[inset_3px_0_0_var(--color-primary),0_10px_30px_-12px_color-mix(in_srgb,var(--color-primary)_40%,transparent)] backdrop-blur-sm short:py-3"
                 >
                   <CircleAlert
                     size={20}
                     strokeWidth={2.25}
                     aria-hidden="true"
-                    className="mt-px shrink-0 text-bonsai-ember"
+                    className="mt-px shrink-0 text-primary-soft"
                   />
                   <div className="min-w-0 text-sm leading-snug">
-                    <p className="font-semibold text-white">
+                    <p className="font-semibold text-text-main">
                       {error ? "Não foi possível entrar" : "Serviço indisponível"}
                     </p>
-                    <p className="mt-0.5 break-words text-neutral-300">{alert}</p>
+                    <p className="mt-0.5 break-words text-text-muted">{alert}</p>
                   </div>
                 </div>
               )}
@@ -220,7 +220,7 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
               <button
                 type="submit"
                 disabled={busy}
-                className="group mt-1 inline-flex h-14 w-full short:h-12 items-center justify-center gap-2 rounded-full bg-linear-to-b from-bonsai-red-bright to-bonsai-red text-lg font-bold text-white shadow-[0_12px_32px_-10px_rgb(178_34_34/0.8)] ring-1 ring-white/10 ring-inset transition hover:brightness-110 active:scale-[0.99] focus-visible:outline-bonsai-ember"
+                className="group mt-1 inline-flex h-14 w-full short:h-12 items-center justify-center gap-2 rounded-full bg-primary-strong text-lg font-bold text-text-main shadow-[0_12px_32px_-10px_color-mix(in_srgb,var(--color-primary)_45%,transparent)] ring-1 ring-accent/10 ring-inset transition hover:brightness-110 active:scale-[0.99] focus-visible:outline-primary"
               >
                 {busy ? (
                   <>
@@ -241,21 +241,21 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
               </button>
             </form>
 
-            <p className="mt-6 text-center text-[13px] leading-relaxed text-neutral-500 short:mt-4">
+            <p className="mt-6 text-center text-[13px] leading-relaxed text-text-muted short:mt-4">
               Use o e-mail e a senha cadastrados pela academia.
             </p>
 
             {DEMO_LOGIN_ENABLED && (
               <section aria-labelledby="demo-title" className="mt-6 short:mt-4">
                 <div className="flex items-center gap-3">
-                  <span className="h-px flex-1 bg-linear-to-r from-transparent to-bonsai-red/40" />
+                  <span className="h-px flex-1 bg-linear-to-r from-transparent to-primary/40" />
                   <h2
                     id="demo-title"
-                    className="text-[11px] font-semibold tracking-[0.25em] text-neutral-400 uppercase"
+                    className="text-[11px] font-semibold tracking-[0.25em] text-text-muted uppercase"
                   >
                     Acesso de demonstração
                   </h2>
-                  <span className="h-px flex-1 bg-linear-to-l from-transparent to-bonsai-red/40" />
+                  <span className="h-px flex-1 bg-linear-to-l from-transparent to-primary/40" />
                 </div>
                 <div className="mt-4 flex justify-center gap-3">
                   {(
@@ -269,23 +269,23 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
                       type="button"
                       disabled={busy}
                       onClick={() => demo(profile)}
-                      className="inline-flex h-10 items-center gap-2 rounded-full border border-bonsai-red/40 bg-bonsai-coal/85 px-5 text-sm font-semibold text-neutral-200 transition hover:border-bonsai-red hover:bg-bonsai-red/15 hover:text-white focus-visible:outline-bonsai-ember"
+                      className="inline-flex h-10 items-center gap-2 rounded-full border border-border-strong bg-surface/85 px-5 text-sm font-semibold text-text-main transition hover:border-primary hover:bg-primary/10 hover:text-text-main focus-visible:outline-primary"
                     >
                       <Icon size={16} aria-hidden="true" />
                       {label}
                     </button>
                   ))}
                 </div>
-                <p className="mt-3 text-center text-[11px] text-neutral-600 short:hidden">
+                <p className="mt-3 text-center text-[11px] text-text-muted short:hidden">
                   Visível só no ambiente de desenvolvimento · contas criadas por{" "}
-                  <code className="text-neutral-500">pnpm demo:seed</code>
+                  <code className="text-text-muted">pnpm demo:seed</code>
                 </p>
               </section>
             )}
           </div>
         </div>
 
-        <small className="block shrink-0 pt-2 text-center text-[11px] tracking-[0.2em] text-neutral-600 uppercase">
+        <small className="block shrink-0 pt-2 text-center text-[11px] tracking-[0.2em] text-text-muted uppercase">
           Bonsai Jiu Jitsu Fight · {new Date().getFullYear()}
         </small>
       </section>
@@ -357,7 +357,7 @@ export default function App() {
     return (
       <main
         role="status"
-        className="grid min-h-dvh place-content-center justify-items-center gap-8 bg-bonsai-ink px-4 text-white"
+        className="grid min-h-dvh place-content-center justify-items-center gap-8 bg-background px-4 text-text-main"
       >
         <Logo
           variant="full"
@@ -365,9 +365,7 @@ export default function App() {
           priority
           className="animate-pulse motion-reduce:animate-none"
         />
-        <p className="text-sm tracking-[0.2em] text-neutral-400 uppercase">
-          Conectando à academia…
-        </p>
+        <p className="text-sm tracking-[0.2em] text-text-muted uppercase">Conectando à academia…</p>
       </main>
     );
   if (!user)

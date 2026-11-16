@@ -16,6 +16,7 @@
     "job:daily": "node apps/api/dist/jobs/diario.js",
     "test": "vitest run",
     "audit:queries": "node scripts/query-audit.mjs",
+    "lint:colors": "node scripts/check-colors.mjs",
     "preview": "vite preview",
     "format": "oxfmt"
   },

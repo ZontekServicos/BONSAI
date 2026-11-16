@@ -77,7 +77,7 @@ export function Logo({
           fetchPriority={priority ? "high" : "auto"}
           draggable={false}
           onError={() => setBroken(true)}
-          className={`${collapsed ? "size-10" : EMBLEM_SIZE[variant]} aspect-square max-w-none rounded-full object-contain ring-1 ring-bonsai-paper/25 drop-shadow-[0_6px_18px_rgb(178_34_34/0.35)] transition-[width,height] duration-300`}
+          className={`${collapsed ? "size-10" : EMBLEM_SIZE[variant]} aspect-square max-w-none rounded-full object-contain ring-1 ring-accent/25 drop-shadow-[0_6px_18px_color-mix(in_srgb,var(--color-primary)_30%,transparent)] transition-[width,height] duration-300`}
         />
       </picture>
       {variant !== "icon" && (
@@ -108,16 +108,16 @@ export function Wordmark({
         stacked ? "items-center" : "items-start"
       } ${hidden ? "max-w-0 opacity-0" : "max-w-[14em] opacity-100"} ${className}`}
     >
-      <span className="font-display text-[2em] font-black italic tracking-[-0.02em] text-white uppercase [text-shadow:2px_2px_0_var(--color-bonsai-red-deep)]">
+      <span className="font-display text-[2em] font-black italic tracking-[-0.02em] text-text-main uppercase [text-shadow:2px_2px_0_var(--color-primary-strong)]">
         Bonsai
       </span>
-      <span className="mt-[0.15em] flex items-center gap-[0.4em] text-[max(0.55em,8px)] font-bold tracking-[0.32em] text-bonsai-ember uppercase">
+      <span className="mt-[0.15em] flex items-center gap-[0.4em] text-[max(0.55em,8px)] font-bold tracking-[0.32em] text-primary-soft uppercase">
         <i className="h-px w-[1.2em] bg-current" />
         Jiu Jitsu
         <i className="h-px w-[1.2em] bg-current" />
       </span>
       <span
-        className={`font-display text-[1.05em] font-extrabold italic tracking-wide text-bonsai-paper uppercase ${
+        className={`font-display text-[1.05em] font-extrabold italic tracking-wide text-text-main uppercase ${
           stacked ? "" : "self-end"
         } -rotate-3`}
       >

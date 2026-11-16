@@ -104,7 +104,7 @@ export function Member() {
         {profile.data && (
           <section className="member">
             <div className="member-top">
-              <strong>FIGHT CONTROL</strong>
+              <strong>BONSAI JIU JITSU</strong>
               <span>MEMBRO OFICIAL</span>
             </div>
             <div className="member-main">
