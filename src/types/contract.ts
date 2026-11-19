@@ -18,13 +18,14 @@ export type Decimal = string;
 // ---------------------------------------------------------------------------
 // Enums (arrays `as const` servem tanto para tipos quanto para <select>/validação)
 // ---------------------------------------------------------------------------
-export const USER_ROLES = ["admin", "aluno"] as const;
+/** professor: alunos, graduações e presença — sem financeiro, caixa, loja e dashboard. */
+export const USER_ROLES = ["admin", "professor", "aluno"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 export const USER_STATUS = ["ativo", "inativo", "inadimplente"] as const;
 export type UserStatus = (typeof USER_STATUS)[number];
 
-export const MODALIDADES = ["boxe", "jiu_jitsu", "muay_thai"] as const;
+export const MODALIDADES = ["boxe", "jiu_jitsu", "muay_thai", "mma"] as const;
 export type Modalidade = (typeof MODALIDADES)[number];
 
 export const PAYMENT_STATUS = ["pendente", "pago", "atrasado"] as const;
@@ -158,6 +159,53 @@ export interface GraduacaoHistorico {
 
 export type Aluno = User & { role: "aluno"; perfil: AlunoProfile };
 
+/** Responsável legal/financeiro (obrigatório para menores de 18 anos). */
+export interface Responsavel {
+  id: UUID;
+  nome: string;
+  parentesco: "pai" | "mae" | "tutor" | "outro";
+  /** E.164 sem "+", ex.: 5511987654321 */
+  whatsapp: string;
+  telefone_emergencia: string;
+  email: string | null;
+}
+
+/** Histórico de saúde — dado sensível (LGPD art. 11): só staff e o próprio aluno. */
+export interface HistoricoSaude {
+  tipo_sanguineo: "A+" | "A-" | "B+" | "B-" | "AB+" | "AB-" | "O+" | "O-" | null;
+  condicoes_medicas: string | null;
+  lesoes_cronicas: string | null;
+  medicacao_continua: string | null;
+  artes_marciais_anteriores: string | null;
+  atualizado_por: UUID | null;
+  created_at: ISOTimestamp;
+  updated_at: ISOTimestamp;
+}
+
+/** Ficha completa: GET /alunos/:id/ficha e resposta de POST /alunos/cadastro. */
+export type FichaAluno = Aluno & {
+  ficha: {
+    genero: "masculino" | "feminino" | "outro" | null;
+    rg: string | null;
+    cpf: string | null;
+    data_nascimento: ISODate | null;
+    endereco: string | null;
+    bairro: string | null;
+    cidade: string | null;
+    cep: string | null;
+    whatsapp: string | null;
+    professor_responsavel: string | null;
+    menor_de_idade: boolean | null;
+    termos_aceitos: boolean;
+    termos_aceitos_em: ISOTimestamp | null;
+    termos_versao: string | null;
+    responsavel: Responsavel | null;
+    saude: HistoricoSaude | null;
+    /** Canal de notificação: WhatsApp do aluno, senão o do responsável. */
+    contato_principal: { whatsapp: string | null; origem: "aluno" | "responsavel" | null };
+  };
+};
+
 /** Payload do JWT de acesso */
 export interface AccessTokenClaims {
   sub: UUID;
@@ -261,7 +309,9 @@ export type ApiErrorCode =
   | "RATE_LIMITED"
   | "ERRO_INTERNO"
   | "CONFLITO"
-  | "IDEMPOTENCY_CONFLICT";
+  | "IDEMPOTENCY_CONFLICT"
+  | "CPF_JA_CADASTRADO"
+  | "RESPONSAVEL_NAO_ENCONTRADO";
 
 export interface ApiError {
   error: {

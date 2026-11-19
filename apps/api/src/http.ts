@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest, HTTPMethods } from "fastify";
 import { z } from "zod";
-import type { User } from "../../../src/types/contract.js";
+import type { User, UserRole } from "../../../src/types/contract.js";
 import type { DB, Database } from "./db.js";
 import type { Config } from "./config.js";
 
@@ -45,13 +45,16 @@ export const method = z.enum([
   "boleto",
   "transferencia",
 ]);
-export const modality = z.enum(["boxe", "jiu_jitsu", "muay_thai"]);
+export const modality = z.enum(["boxe", "jiu_jitsu", "muay_thai", "mma"]);
 export const page = {
   page: z.coerce.number().int().min(1).max(100000).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(20),
 };
 export const range = { de: date.optional(), ate: date.optional() };
 export const empty = z.strictObject({});
+/** Papéis com função pedagógica/recepção. Professor NÃO acessa financeiro, caixa, loja nem dashboard. */
+export const STAFF: UserRole[] = ["admin", "professor"];
+type Access = "public" | UserRole | UserRole[];
 export function route<
   B extends z.ZodType = typeof empty,
   Q extends z.ZodType = typeof empty,
@@ -61,7 +64,7 @@ export function route<
   ctx: Context,
   verb: HTTPMethods,
   path: string,
-  spec: { body?: B; query?: Q; params?: P; role?: "admin" | "aluno" | "public" },
+  spec: { body?: B; query?: Q; params?: P; role?: Access },
   handler: (
     r: FastifyRequest,
     reply: FastifyReply,
@@ -76,8 +79,8 @@ export function route<
     preHandler: async (r) => {
       if (spec.role !== "public") {
         await ctx.authenticate(r);
-        if (spec.role && r.account.role !== spec.role)
-          fail(403, "SEM_PERMISSAO", "Acesso não permitido.");
+        const allowed = spec.role === undefined || [spec.role].flat().includes(r.account.role);
+        if (!allowed) fail(403, "SEM_PERMISSAO", "Acesso não permitido.");
       }
     },
     handler: (r, reply) =>
@@ -89,6 +92,11 @@ export function route<
         (spec.params ?? empty).parse(r.params) as z.infer<P>,
       ),
   });
+}
+/** Staff (admin/professor) ou o próprio aluno. */
+export function staffOrSelf(r: FastifyRequest, id: string) {
+  if (!STAFF.includes(r.account.role) && r.account.id !== id)
+    fail(403, "SEM_PERMISSAO", "Acesso não permitido.");
 }
 export function selfOrAdmin(r: FastifyRequest, id: string) {
   if (r.account.role !== "admin" && r.account.id !== id)

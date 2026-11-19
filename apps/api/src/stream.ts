@@ -1,7 +1,7 @@
 import pg from "pg";
 import { EventEmitter } from "node:events";
 import type { FastifyInstance } from "fastify";
-import { route, fail, type Context } from "./http.js";
+import { route, fail, STAFF, type Context } from "./http.js";
 
 export function presenceStream(app: FastifyInstance, ctx: Context) {
   const events = new EventEmitter();
@@ -53,7 +53,7 @@ export function presenceStream(app: FastifyInstance, ctx: Context) {
     for (const close of clients) close();
     await connection?.end().catch(() => {});
   });
-  route(app, ctx, "GET", "/presencas/stream", { role: "admin" }, async (r, reply) => {
+  route(app, ctx, "GET", "/presencas/stream", { role: STAFF }, async (r, reply) => {
     if (clients.size >= 500 || (perUser.get(r.account.id) ?? 0) >= 3)
       fail(429, "RATE_LIMITED", "Limite de conexões ao vivo.");
     perUser.set(r.account.id, (perUser.get(r.account.id) ?? 0) + 1);

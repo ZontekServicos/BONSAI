@@ -26,14 +26,16 @@ O Vite existente continua em 8443 e encaminha `/api` para `localhost:3001`. Se n
 
 ### Contas de demonstração (somente desenvolvimento)
 
-Para testar o controle de acesso, `pnpm demo:seed` cria (ou redefine) duas contas reais no banco do `.env`:
+Para testar o controle de acesso, `pnpm demo:seed` cria (ou redefine) contas reais no banco do `.env`:
 
 | Perfil | E-mail | Senha |
 |---|---|---|
-| Professor (admin) | `professor@bonsai.demo` | `Bonsai@Professor2026` |
-| Aluno | `aluno@bonsai.demo` | `Bonsai@Aluno2026` |
+| Gestor (`admin`) | `gestor@bonsai.demo` | `Bonsai@Gestor2026` |
+| Professor (`professor`) | `professor@bonsai.demo` | `Bonsai@Professor2026` |
+| Aluno adulto (`aluno`) | `aluno@bonsai.demo` | `Bonsai@Aluno2026` |
+| Aluno menor, com responsável | `menor@bonsai.demo` | `Bonsai@Aluno2026` |
 
-Com `VITE_DEMO_LOGIN=true` no `.env`, a tela de login mostra os botões **Professor** e **Aluno** no `vite dev`. O login passa pela API normal (Argon2id + JWT + RBAC). O script recusa `NODE_ENV=production` e fica fora do `build:api`. Os botões e as credenciais são removidos do bundle em `vite build`, mesmo com a flag ligada.
+Com `VITE_DEMO_LOGIN=true` no `.env`, a tela de login mostra os botões **Gestor**, **Professor** e **Aluno** no `vite dev`. O login passa pela API normal (Argon2id + JWT + RBAC). O script recusa `NODE_ENV=production` e fica fora do `build:api`. Os botões e as credenciais são removidos do bundle em `vite build`, mesmo com a flag ligada.
 
 ## Verificação
 

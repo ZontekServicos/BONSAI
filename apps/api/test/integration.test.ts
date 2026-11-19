@@ -88,6 +88,8 @@ beforeAll(async () => {
   await db.query(await readFile("database/schema.sql", "utf8"));
   await db.query(await readFile("database/migrations/0002_runtime.sql", "utf8"));
   await db.query(await readFile("database/migrations/0003_search.sql", "utf8"));
+  await db.query(await readFile("database/migrations/0004_papeis_modalidades.sql", "utf8"));
+  await db.query(await readFile("database/migrations/0005_cadastro_aluno.sql", "utf8"));
   app = await buildApp(config, db, { logger: false, stream: false });
   await app.ready();
   passwordHash = await hashPassword(password);
@@ -639,5 +641,298 @@ describe("stock, cash and reports", () => {
       "/me/presencas",
     ])
       expect((await request("GET", path, undefined, studentToken)).statusCode).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fase 1 — cadastro completo (responsável → aluno → saúde) e papel professor
+// ---------------------------------------------------------------------------
+let cpfSeq = 100000000;
+/** CPF de teste válido e único (dígitos verificadores calculados). */
+function gerarCpf() {
+  const dv = (d: number[]) => {
+    const s = d.reduce((acc, n, i) => acc + n * (d.length + 1 - i), 0);
+    const r = (s * 10) % 11;
+    return r === 10 ? 0 : r;
+  };
+  const base = String(cpfSeq++).split("").map(Number);
+  const d1 = dv(base);
+  return [...base, d1, dv([...base, d1])].join("");
+}
+/** Data de hoje em America/Sao_Paulo (mesma regra do fn_hoje_sp). */
+const todaySP = () =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+const shift = (iso: string, years: number, days = 0) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCFullYear(d.getUTCFullYear() + years);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+let seq = 0;
+function cadastro(
+  aluno: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> & { aluno: { cpf: string; email: string } } {
+  seq++;
+  return {
+    aluno: {
+      nome: "Ana Lutadora",
+      email: `ana${seq}@example.test`,
+      senha_inicial: "senha-inicial-123",
+      genero: "feminino",
+      rg: "12.345.678-9",
+      cpf: gerarCpf(),
+      data_nascimento: "1995-05-20",
+      endereco: "Rua do Tatame, 10",
+      bairro: "Centro",
+      cidade: "São Paulo",
+      cep: "01001-000",
+      whatsapp: "(11) 98765-4321",
+      modalidade: "mma",
+      faixa: "Faixa branca",
+      professor_responsavel: "Prof. Teste",
+      ...aluno,
+    } as { cpf: string; email: string },
+    saude: {
+      tipo_sanguineo: "O+",
+      condicoes_medicas: "Asma leve",
+      lesoes_cronicas: "",
+      medicacao_continua: null,
+      artes_marciais_anteriores: "Judô",
+    },
+    termos: { aceito: true, versao: "2026-11" },
+    ...extra,
+  };
+}
+const guardian = {
+  nome: "Maria Responsável",
+  parentesco: "mae",
+  whatsapp: "11 91234-5678",
+  telefone_emergencia: "(11) 3333-4444",
+};
+const count = async (table: string) =>
+  Number((await one(db, `SELECT count(*)::int AS n FROM ${table}`)).n);
+
+describe("student registration (phase 1) and professor role", () => {
+  let professor: string;
+  let professorToken: string;
+  beforeEach(async () => {
+    professor = await user("prof@example.test", "professor");
+    professorToken = (
+      await request("POST", "/auth/login", { email: "prof@example.test", password }, "")
+    ).json().access_token;
+  });
+  const register = (body: unknown, token?: string) =>
+    request("POST", "/alunos/cadastro", body, token ?? professorToken);
+
+  it("registers an adult atomically, normalizes input and restricts the record to staff and the student", async () => {
+    const body = cadastro();
+    const res = await register(body);
+    expect(res.statusCode).toBe(201);
+    const created = res.json();
+    expect(created.perfil.modalidade).toBe("mma");
+    expect(created.ficha).toMatchObject({
+      cpf: body.aluno.cpf,
+      cep: "01001000",
+      whatsapp: "5511987654321",
+      menor_de_idade: false,
+      responsavel: null,
+      termos_aceitos: true,
+      termos_versao: "2026-11",
+      contato_principal: { whatsapp: "5511987654321", origem: "aluno" },
+    });
+    expect(created.ficha.saude).toMatchObject({
+      tipo_sanguineo: "O+",
+      lesoes_cronicas: null,
+      atualizado_por: professor,
+    });
+    // dado sensível: outro aluno não vê; o próprio aluno e o staff veem
+    const path = `/alunos/${created.id}/ficha`;
+    expect((await request("GET", path, undefined, studentToken)).statusCode).toBe(403);
+    expect((await request("GET", path)).statusCode).toBe(200);
+    const own = (
+      await request(
+        "POST",
+        "/auth/login",
+        { email: created.email, password: "senha-inicial-123" },
+        "",
+      )
+    ).json().access_token;
+    expect((await request("GET", path, undefined, own)).statusCode).toBe(200);
+    // listagem nunca carrega CPF nem saúde
+    const list = (await request("GET", "/alunos?page_size=100")).body;
+    expect(list).not.toContain(body.aluno.cpf);
+    expect(list).not.toContain("Asma leve");
+  });
+
+  it("requires a guardian for minors, falls back to the guardian WhatsApp and links siblings", async () => {
+    const minor = { data_nascimento: shift(todaySP(), -12), whatsapp: null };
+    const missing = await register(cadastro(minor));
+    expect(missing.statusCode).toBe(400);
+    expect(JSON.stringify(missing.json().error.details)).toContain("responsavel");
+
+    const first = await register(cadastro(minor, { responsavel: guardian }));
+    expect(first.statusCode).toBe(201);
+    const f = first.json().ficha;
+    expect(f.menor_de_idade).toBe(true);
+    expect(f.responsavel).toMatchObject({
+      nome: "Maria Responsável",
+      whatsapp: "5511912345678",
+      telefone_emergencia: "551133334444",
+    });
+    expect(f.contato_principal).toEqual({ whatsapp: "5511912345678", origem: "responsavel" });
+
+    const sibling = await register(cadastro(minor, { responsavel: { id: f.responsavel.id } }));
+    expect(sibling.statusCode).toBe(201);
+    expect(sibling.json().ficha.responsavel.id).toBe(f.responsavel.id);
+    const search = (
+      await request("GET", "/responsaveis?q=maria", undefined, professorToken)
+    ).json();
+    expect(search.data).toEqual([expect.objectContaining({ id: f.responsavel.id, alunos: 2 })]);
+    // busca por nome sem dígitos não pode casar com todos pelo telefone
+    expect(
+      (await request("GET", "/responsaveis?q=zzz", undefined, professorToken)).json().total,
+    ).toBe(0);
+    const ghost = await register(cadastro(minor, { responsavel: { id: randomUUID() } }));
+    expect(ghost.statusCode).toBe(422);
+    expect(ghost.json().error.code).toBe("RESPONSAVEL_NAO_ENCONTRADO");
+  });
+
+  it("treats the 18th birthday as adult (America/Sao_Paulo date)", async () => {
+    const adult = await register(cadastro({ data_nascimento: shift(todaySP(), -18) }));
+    expect(adult.statusCode).toBe(201);
+    expect(adult.json().ficha.menor_de_idade).toBe(false);
+    const dayBefore18 = shift(todaySP(), -18, 1);
+    expect((await register(cadastro({ data_nascimento: dayBefore18 }))).statusCode).toBe(400);
+  });
+
+  it("rolls back the new guardian and user when a later step fails", async () => {
+    const taken = cadastro();
+    expect((await register(taken)).statusCode).toBe(201);
+    const before = [await count("responsaveis"), await count("users")];
+    const dupCpf = await register(
+      cadastro(
+        { cpf: taken.aluno.cpf, data_nascimento: shift(todaySP(), -10) },
+        { responsavel: guardian },
+      ),
+    );
+    expect(dupCpf.statusCode).toBe(409);
+    expect(dupCpf.json().error.code).toBe("CPF_JA_CADASTRADO");
+    const dupEmail = await register(
+      cadastro({ email: taken.aluno.email }, { responsavel: guardian }),
+    );
+    expect(dupEmail.statusCode).toBe(409);
+    expect(dupEmail.json().error.code).toBe("EMAIL_JA_CADASTRADO");
+    expect([await count("responsaveis"), await count("users")]).toEqual(before);
+  });
+
+  it("rejects invalid input and enforces CPF, minor and terms rules in the database", async () => {
+    for (const aluno of [
+      { cpf: "111.111.111-11" },
+      { cpf: "529.982.247-26" },
+      { data_nascimento: shift(todaySP(), 0, 1) },
+      { cep: "123" },
+      { whatsapp: "123" },
+      { modalidade: "karate" },
+    ])
+      expect((await register(cadastro(aluno))).statusCode, JSON.stringify(aluno)).toBe(400);
+    expect(
+      (await register({ ...cadastro(), termos: { aceito: false, versao: "2026-11" } })).statusCode,
+    ).toBe(400);
+    // última linha de defesa: mesmo por SQL direto
+    await expect(
+      db.query("UPDATE aluno_profile SET data_nascimento=fn_hoje_sp()-3650 WHERE user_id=$1", [
+        student,
+      ]),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      db.query("UPDATE aluno_profile SET cpf='12345678900' WHERE user_id=$1", [student]),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      db.query("UPDATE aluno_profile SET termos_aceitos=true WHERE user_id=$1", [student]),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("gives professors students, graduations and attendance but no finance, cash, store or dashboard", async () => {
+    for (const path of [
+      "/alunos",
+      `/alunos/${student}/graduacoes`,
+      "/presencas/ativas",
+      "/presencas",
+      "/presencas/estatisticas",
+      "/responsaveis",
+    ])
+      expect((await request("GET", path, undefined, professorToken)).statusCode, path).toBe(200);
+    const detail = await request("GET", `/alunos/${student}`, undefined, professorToken);
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).not.toHaveProperty("situacao_financeira");
+    const checkIn = await request(
+      "POST",
+      "/presencas/check-in",
+      { user_id: student },
+      professorToken,
+    );
+    expect(checkIn.statusCode).toBe(201);
+    const promote = await request(
+      "POST",
+      `/alunos/${student}/graduacoes`,
+      { faixa_nova: "Faixa azul", graduacao_nova: 0 },
+      professorToken,
+    );
+    expect(promote.statusCode).toBe(201);
+    for (const [method, path, body] of [
+      ["GET", "/dashboard"],
+      ["GET", "/mensalidades"],
+      ["GET", "/financeiro/resumo"],
+      ["GET", "/financeiro/inadimplentes"],
+      ["GET", "/caixa/balanco"],
+      ["GET", "/caixa/lancamentos"],
+      ["GET", "/vendas"],
+      ["POST", "/produtos", { nome: "X", preco: "1.00", estoque_atual: 1, categoria: "x" }],
+      ["POST", "/alunos", {}],
+      ["PATCH", `/alunos/${student}/status`, { status: "inativo" }],
+      ["GET", "/professores"],
+    ] as [HTTPMethods, string, unknown?][])
+      expect(
+        (await request(method, path, body, professorToken)).statusCode,
+        `${method} ${path}`,
+      ).toBe(403);
+    // aluno não cadastra nem consulta responsáveis
+    expect((await register(cadastro(), studentToken)).statusCode).toBe(403);
+    expect((await request("GET", "/responsaveis", undefined, studentToken)).statusCode).toBe(403);
+  });
+
+  it("lets only admins manage professor accounts and revokes sessions on deactivation", async () => {
+    const created = await request("POST", "/professores", {
+      nome: "Prof Novo",
+      email: "novo.prof@example.test",
+      senha_inicial: "senha-forte-1234",
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ role: "professor", status: "ativo" });
+    expect(created.json()).not.toHaveProperty("password_hash");
+    const token = (
+      await request(
+        "POST",
+        "/auth/login",
+        { email: "novo.prof@example.test", password: "senha-forte-1234" },
+        "",
+      )
+    ).json().access_token;
+    expect((await request("GET", "/auth/me", undefined, token)).json().user.role).toBe("professor");
+    expect((await request("GET", "/professores")).json()).toHaveLength(2);
+    const off = await request("PATCH", `/professores/${created.json().id}/status`, {
+      status: "inativo",
+    });
+    expect(off.statusCode).toBe(200);
+    expect((await request("GET", "/auth/me", undefined, token)).statusCode).not.toBe(200);
+    // a rota de professores não altera alunos
+    const wrong = await request("PATCH", `/professores/${student}/status`, { status: "inativo" });
+    expect(wrong.statusCode).toBe(404);
   });
 });

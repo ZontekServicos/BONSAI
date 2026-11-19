@@ -14,6 +14,8 @@ try {
     "database/schema.sql",
     "database/migrations/0002_runtime.sql",
     "database/migrations/0003_search.sql",
+    "database/migrations/0004_papeis_modalidades.sql",
+    "database/migrations/0005_cadastro_aluno.sql",
   ])
     await client.query(await readFile(path, "utf8"));
   await client.query(`INSERT INTO users(nome,email,password_hash,role)

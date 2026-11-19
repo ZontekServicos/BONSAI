@@ -14,6 +14,7 @@ import { billingRoutes } from "./modules/billing.js";
 import { attendanceRoutes } from "./modules/attendance.js";
 import { storeRoutes } from "./modules/store.js";
 import { reportRoutes } from "./modules/reports.js";
+import { cadastroRoutes } from "./modules/cadastro.js";
 import { presenceStream } from "./stream.js";
 
 export async function buildApp(
@@ -69,53 +70,46 @@ export async function buildApp(
   });
   app.setErrorHandler((error, _r, reply) => {
     if (error instanceof ApiFailure)
-      return reply
-        .code(error.statusCode)
-        .send({
-          error: {
-            code: error.code,
-            message: error.message,
-            ...(error.details ? { details: error.details } : {}),
-          },
-        });
+      return reply.code(error.statusCode).send({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+        },
+      });
     if (error instanceof ZodError)
-      return reply
-        .code(400)
-        .send({
-          error: {
-            code: "VALIDATION_ERROR",
-            message: "Dados inválidos.",
-            details: error.issues.map((i) => ({ path: i.path, message: i.message })),
-          },
-        });
+      return reply.code(400).send({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Dados inválidos.",
+          details: error.issues.map((i) => ({ path: i.path, message: i.message })),
+        },
+      });
     const e = error as { code?: string; constraint?: string; statusCode?: number };
     const unique: Record<string, string> = {
       uq_users_email: "EMAIL_JA_CADASTRADO",
       uq_attendance_sessao_aberta: "CHECKIN_JA_ABERTO",
       uq_financeiro_competencia: "MENSALIDADE_DUPLICADA",
+      uq_aluno_cpf: "CPF_JA_CADASTRADO",
     };
     if (e.code === "23505")
-      return reply
-        .code(409)
-        .send({
-          error: {
-            code: unique[e.constraint ?? ""] ?? "CONFLITO",
-            message: "Já existe um registro com esses dados.",
-          },
-        });
+      return reply.code(409).send({
+        error: {
+          code: unique[e.constraint ?? ""] ?? "CONFLITO",
+          message: "Já existe um registro com esses dados.",
+        },
+      });
     if (e.code === "P0002")
       return reply
         .code(404)
         .send({ error: { code: "NAO_ENCONTRADO", message: "Registro não encontrado." } });
     if (["23514", "23503", "22003", "22007", "22008", "22P02"].includes(e.code ?? ""))
-      return reply
-        .code(422)
-        .send({
-          error: {
-            code: "VALIDATION_ERROR",
-            message: "Dados incompatíveis com as regras do cadastro.",
-          },
-        });
+      return reply.code(422).send({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Dados incompatíveis com as regras do cadastro.",
+        },
+      });
     if (e.statusCode && e.statusCode >= 400 && e.statusCode < 500)
       return reply
         .code(e.statusCode)
@@ -139,6 +133,7 @@ export async function buildApp(
   attendanceRoutes(app, ctx);
   storeRoutes(app, ctx);
   reportRoutes(app, ctx);
+  cadastroRoutes(app, ctx);
   if (options.stream !== false) presenceStream(app, ctx);
   if (config.SERVE_WEB) {
     await app.register(staticFiles, { root: resolve("dist"), prefix: "/", index: "index.html" });

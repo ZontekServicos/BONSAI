@@ -12,6 +12,7 @@ import {
   paginate,
   fail,
   found,
+  STAFF,
   type Context,
 } from "../http.js";
 import { situation } from "./billing.js";
@@ -75,7 +76,7 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
     "POST",
     "/carteirinha/validar",
     {
-      role: "admin",
+      role: STAFF,
       body: z.strictObject({
         qr_token: z.string().min(1).max(2048),
         registrar_checkin: z.boolean().default(false),
@@ -106,7 +107,7 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
     "POST",
     "/presencas/check-in",
     {
-      role: "admin",
+      role: STAFF,
       body: z.union([
         z.strictObject({ user_id: uuid }),
         z.strictObject({ qr_token: z.string().min(1).max(2048) }),
@@ -136,7 +137,7 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
       "PATCH",
       byUser ? "/presencas/check-out" : "/presencas/:attendance_id/check-out",
       {
-        role: "admin",
+        role: STAFF,
         params: byUser
           ? z.strictObject({ attendance_id: uuid.optional() })
           : z.strictObject({ attendance_id: uuid }),
@@ -159,7 +160,7 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
     ctx,
     "GET",
     "/presencas/ativas",
-    { role: "admin", query: z.strictObject({ modalidade: modality.optional() }) },
+    { role: STAFF, query: z.strictObject({ modalidade: modality.optional() }) },
     async (_r, _s, _b, q) =>
       (
         await db.query(
@@ -174,7 +175,7 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
     "GET",
     "/presencas",
     {
-      role: "admin",
+      role: STAFF,
       query: z.strictObject({
         ...page,
         ...range,
@@ -198,7 +199,7 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
     ctx,
     "GET",
     "/presencas/estatisticas",
-    { role: "admin", query: z.strictObject(range) },
+    { role: STAFF, query: z.strictObject(range) },
     async (_r, _s, _b, q) => {
       const base = `FROM attendance a JOIN aluno_profile p ON p.user_id=a.user_id
       WHERE a.check_in >= (coalesce($1::date,fn_hoje_sp()-30)::timestamp AT TIME ZONE 'America/Sao_Paulo')

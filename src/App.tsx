@@ -17,6 +17,7 @@ import {
   LoaderCircle,
   GraduationCap,
   CircleAlert,
+  ShieldCheck,
 } from "lucide-react";
 import { DEMO_ACCOUNTS, type DemoProfile } from "./lib/demo-accounts";
 
@@ -24,7 +25,7 @@ import { DEMO_ACCOUNTS, type DemoProfile } from "./lib/demo-accounts";
 // e o bloco de demonstração (com as credenciais) é eliminado do bundle.
 const DEMO_LOGIN_ENABLED = import.meta.env.DEV && import.meta.env.VITE_DEMO_LOGIN === "true";
 import { Logo, LOGO_SRC, Wordmark, useScrolled } from "./components/Logo";
-import type { User } from "./types/contract";
+import type { User, UserRole } from "./types/contract";
 import { api, login, logout, refresh, errorMessage, streamPresence } from "./lib/api";
 import { Card, Form, Notice } from "./components/ui";
 import { Dashboard, Students, Presence } from "./components/Academy";
@@ -260,6 +261,7 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
                 <div className="mt-4 flex justify-center gap-3">
                   {(
                     [
+                      ["gestor", "Gestor", ShieldCheck],
                       ["professor", "Professor", GraduationCap],
                       ["aluno", "Aluno", UserRound],
                     ] as const
@@ -302,6 +304,22 @@ const items = [
   { id: "cash", label: "Fluxo de caixa", icon: Wallet },
   { id: "password", label: "Minha senha", icon: KeyRound },
 ] as const;
+/** Telas por papel; a primeira é a inicial. A API aplica o mesmo RBAC. */
+const VIEWS: Record<UserRole, View[]> = {
+  admin: ["dashboard", "students", "presence", "finance", "store", "cash", "password"],
+  professor: ["students", "presence", "password"],
+  aluno: ["dashboard", "password"],
+};
+const ROLE_LABEL: Record<UserRole, string> = {
+  admin: "Administrador",
+  professor: "Professor",
+  aluno: "Aluno",
+};
+const SUBTITLE: Record<UserRole, string> = {
+  admin: "Sua academia, sob controle.",
+  professor: "Seus alunos e o tatame, em dia.",
+  aluno: "Acompanhe sua evolução dentro e fora do tatame.",
+};
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [starting, setStarting] = useState(true);
@@ -335,7 +353,7 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (user?.role !== "admin") return;
+    if (!user || user.role === "aluno") return;
     const controller = new AbortController();
     void streamPresence(controller.signal, () => setTick((n) => n + 1));
     return () => controller.abort();
@@ -379,14 +397,14 @@ export default function App() {
         }}
       />
     );
-  const nav =
-    user.role === "admin"
-      ? items
-      : items.filter((i) => i.id === "dashboard" || i.id === "password");
+  const allowed = VIEWS[user.role];
+  // Tela fora do papel (ex.: "dashboard" após login de professor) cai na inicial.
+  const current = allowed.includes(view) ? view : allowed[0];
+  const nav = items.filter((i) => allowed.includes(i.id));
   const title =
-    user.role === "aluno" && view === "dashboard"
+    user.role === "aluno" && current === "dashboard"
       ? "Minha jornada"
-      : items.find((i) => i.id === view)?.label;
+      : items.find((i) => i.id === current)?.label;
   return (
     <div className="app">
       <button
@@ -406,7 +424,7 @@ export default function App() {
           {nav.map((i) => (
             <button
               key={i.id}
-              className={view === i.id ? "active" : ""}
+              className={current === i.id ? "active" : ""}
               onClick={() => {
                 setView(i.id);
                 setMenu(false);
@@ -421,7 +439,7 @@ export default function App() {
           <div>{user.nome[0]}</div>
           <span>
             <strong>{user.nome}</strong>
-            <small>{user.role === "admin" ? "Administrador" : "Aluno"}</small>
+            <small>{ROLE_LABEL[user.role]}</small>
           </span>
           <button disabled={exiting} onClick={() => void exit()} aria-label="Sair">
             <LogOut size={18} />
@@ -437,16 +455,12 @@ export default function App() {
             <Logo variant="icon" className="min-[951px]:hidden" />
             <div>
               <h1>{title}</h1>
-              <p>
-                {user.role === "admin"
-                  ? "Sua academia, sob controle."
-                  : "Acompanhe sua evolução dentro e fora do tatame."}
-              </p>
+              <p>{SUBTITLE[user.role]}</p>
             </div>
           </div>
         </header>
         <Notice error={error} />
-        {view === "password" ? (
+        {current === "password" ? (
           <Card title="Alterar senha">
             <p>Após a alteração, entre novamente em todos os dispositivos.</p>
             <Form
@@ -465,12 +479,12 @@ export default function App() {
           <Member />
         ) : (
           <>
-            {view === "dashboard" && <Dashboard tick={tick} />}
-            {view === "students" && <Students />}
-            {view === "presence" && <Presence tick={tick} />}
-            {view === "finance" && <Finance />}
-            {view === "store" && <Store />}
-            {view === "cash" && <Cash />}
+            {current === "dashboard" && <Dashboard tick={tick} />}
+            {current === "students" && <Students canManage={user.role === "admin"} />}
+            {current === "presence" && <Presence tick={tick} />}
+            {current === "finance" && <Finance />}
+            {current === "store" && <Store />}
+            {current === "cash" && <Cash />}
           </>
         )}
       </main>

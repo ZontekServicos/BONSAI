@@ -6,6 +6,7 @@ export const labels: Record<string, string> = {
   jiu_jitsu: "Jiu-Jitsu",
   boxe: "Boxe",
   muay_thai: "Muay Thai",
+  mma: "MMA",
   ativo: "Ativo",
   inativo: "Inativo",
   inadimplente: "Inadimplente",

@@ -13,7 +13,8 @@ import {
   paginate,
   found,
   fail,
-  selfOrAdmin,
+  staffOrSelf,
+  STAFF,
   type Context,
 } from "../http.js";
 import { hashPassword } from "../auth.js";
@@ -31,7 +32,7 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
     "GET",
     "/alunos",
     {
-      role: "admin",
+      role: STAFF,
       query: z.strictObject({
         ...page,
         q: text().optional(),
@@ -95,7 +96,9 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
     },
   );
   route(app, ctx, "GET", "/alunos/:id", { params }, async (r, _s, _b, _q, p) => {
-    selfOrAdmin(r, p.id);
+    staffOrSelf(r, p.id);
+    // Professor vê o cadastro, mas não a situação financeira.
+    if (r.account.role === "professor") return aluno(db, p.id);
     return db.transaction(async (tx) => {
       const s = await situation(tx, p.id, config);
       return { ...(await aluno(tx, p.id)), situacao_financeira: s };
@@ -163,7 +166,7 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
       ])
       .then((r) => r.rows);
   route(app, ctx, "GET", "/alunos/:id/graduacoes", { params }, async (r, _s, _b, _q, p) => {
-    selfOrAdmin(r, p.id);
+    staffOrSelf(r, p.id);
     await aluno(db, p.id);
     return history(p.id);
   });
@@ -173,7 +176,7 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
     "POST",
     "/alunos/:id/graduacoes",
     {
-      role: "admin",
+      role: STAFF,
       params,
       body: z.strictObject({
         faixa_nova: text(40),

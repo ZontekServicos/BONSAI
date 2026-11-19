@@ -113,7 +113,8 @@ export function StudentPicker({
     </div>
   );
 }
-export function Students() {
+/** canManage=false (professor): sem cadastro simples, edição de dados e status da matrícula. */
+export function Students({ canManage = true }: { canManage?: boolean }) {
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
@@ -133,6 +134,7 @@ export function Students() {
     return (
       <StudentDetail
         id={selected}
+        canManage={canManage}
         onBack={() => {
           setSelected(undefined);
           r.reload();
@@ -144,9 +146,11 @@ export function Students() {
       <Card
         title="Base de alunos"
         action={
-          <button className="primary" onClick={() => setAdding(!adding)}>
-            {adding ? "Fechar cadastro" : "Novo aluno"}
-          </button>
+          canManage && (
+            <button className="primary" onClick={() => setAdding(!adding)}>
+              {adding ? "Fechar cadastro" : "Novo aluno"}
+            </button>
+          )
         }
       >
         <label className="search">
@@ -185,7 +189,7 @@ export function Students() {
         </Table>
         <Pager page={page} total={r.data?.total ?? 0} onPage={setPage} />
       </Card>
-      {adding && (
+      {canManage && adding && (
         <Card title="Novo aluno">
           <Form
             fields={[
@@ -212,7 +216,15 @@ export function Students() {
     </>
   );
 }
-function StudentDetail({ id, onBack }: { id: string; onBack: () => void }) {
+function StudentDetail({
+  id,
+  canManage,
+  onBack,
+}: {
+  id: string;
+  canManage: boolean;
+  onBack: () => void;
+}) {
   const r = useResource<Aluno>(`/alunos/${id}`);
   const h = useResource<GraduacaoHistorico[]>(`/alunos/${id}/graduacoes`);
   const a = r.data;
@@ -229,46 +241,50 @@ function StudentDetail({ id, onBack }: { id: string; onBack: () => void }) {
             <p>
               {a.perfil.total_presencas} presenças · Matrícula {a.perfil.numero_matricula}
             </p>
-            <Form
-              key={JSON.stringify(a)}
-              fields={[
-                { name: "nome", label: "Nome", value: a.nome },
-                { name: "email", label: "E-mail", type: "email", value: a.email },
-                {
-                  name: "modalidade",
-                  label: "Modalidade",
-                  options: modalities,
-                  value: a.perfil.modalidade,
-                },
-              ]}
-              onSubmit={async (b) => {
-                await api(`/alunos/${id}`, { method: "PATCH", body: b });
-                r.reload();
-              }}
-            />
+            {canManage && (
+              <Form
+                key={JSON.stringify(a)}
+                fields={[
+                  { name: "nome", label: "Nome", value: a.nome },
+                  { name: "email", label: "E-mail", type: "email", value: a.email },
+                  {
+                    name: "modalidade",
+                    label: "Modalidade",
+                    options: modalities,
+                    value: a.perfil.modalidade,
+                  },
+                ]}
+                onSubmit={async (b) => {
+                  await api(`/alunos/${id}`, { method: "PATCH", body: b });
+                  r.reload();
+                }}
+              />
+            )}
           </Card>
-          <Card title="Status da matrícula">
-            <p>
-              A inadimplência é calculada pelas mensalidades. Inativar revoga o acesso do aluno.
-            </p>
-            <Form
-              fields={[
-                {
-                  name: "status",
-                  label: "Status administrativo",
-                  value: a.status === "inativo" ? "inativo" : "ativo",
-                  options: [
-                    { value: "ativo", label: "Ativo (sujeito à situação financeira)" },
-                    { value: "inativo", label: "Inativo" },
-                  ],
-                },
-              ]}
-              onSubmit={async (b) => {
-                await api(`/alunos/${id}/status`, { method: "PATCH", body: b });
-                r.reload();
-              }}
-            />
-          </Card>
+          {canManage && (
+            <Card title="Status da matrícula">
+              <p>
+                A inadimplência é calculada pelas mensalidades. Inativar revoga o acesso do aluno.
+              </p>
+              <Form
+                fields={[
+                  {
+                    name: "status",
+                    label: "Status administrativo",
+                    value: a.status === "inativo" ? "inativo" : "ativo",
+                    options: [
+                      { value: "ativo", label: "Ativo (sujeito à situação financeira)" },
+                      { value: "inativo", label: "Inativo" },
+                    ],
+                  },
+                ]}
+                onSubmit={async (b) => {
+                  await api(`/alunos/${id}/status`, { method: "PATCH", body: b });
+                  r.reload();
+                }}
+              />
+            </Card>
+          )}
           <Card title="Registrar graduação">
             <Form
               fields={[

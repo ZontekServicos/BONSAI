@@ -7,12 +7,20 @@
  * `false` e o bundler remove as credenciais do JavaScript de produção.
  */
 export const DEMO_ACCOUNTS = {
+  gestor: {
+    role: "admin",
+    nome: "Gestor Demo",
+    email: "gestor@bonsai.demo",
+    password: "Bonsai@Gestor2026",
+  },
   professor: {
+    role: "professor",
     nome: "Professor Demo",
     email: "professor@bonsai.demo",
     password: "Bonsai@Professor2026",
   },
   aluno: {
+    role: "aluno",
     nome: "Aluno Demo",
     email: "aluno@bonsai.demo",
     password: "Bonsai@Aluno2026",
