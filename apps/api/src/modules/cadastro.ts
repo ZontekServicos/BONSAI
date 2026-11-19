@@ -15,7 +15,7 @@ import {
 } from "../http.js";
 import { hashPassword } from "../auth.js";
 import { aluno } from "./alunos.js";
-import { cadastroAlunoSchema } from "../../../../src/lib/cadastro.js";
+import { cadastroAlunoSchema, colunasGraduacao } from "../../../../src/lib/cadastro.js";
 
 /** Ficha completa do aluno. Inclui dados sensíveis: só staff ou o próprio aluno. */
 export async function ficha(db: DB, id: string) {
@@ -24,8 +24,14 @@ export async function ficha(db: DB, id: string) {
     db,
     `SELECT p.genero, p.rg, p.cpf, p.data_nascimento, p.endereco, p.bairro, p.cidade, p.cep,
             p.whatsapp, p.professor_responsavel,
+            date_part('year', age(fn_hoje_sp(), p.data_nascimento))::int AS idade,
             (p.data_nascimento > (fn_hoje_sp() - interval '18 years')::date) AS menor_de_idade,
+            CASE WHEN p.contato_emergencia_nome IS NULL THEN NULL ELSE json_build_object(
+              'nome', p.contato_emergencia_nome, 'parentesco', p.contato_emergencia_parentesco,
+              'telefone', p.contato_emergencia_telefone,
+              'telefone2', p.contato_emergencia_telefone2) END AS contato_emergencia,
             p.termos_aceitos, p.termos_aceitos_em, p.termos_versao,
+            p.autoriza_uso_imagem, p.autoriza_grupo_whatsapp, p.ficha_pendente,
             CASE WHEN r.id IS NULL THEN NULL ELSE json_build_object(
               'id', r.id, 'nome', r.nome, 'parentesco', r.parentesco, 'whatsapp', r.whatsapp,
               'telefone_emergencia', r.telefone_emergencia, 'email', r.email) END AS responsavel,
@@ -51,7 +57,10 @@ export function cadastroRoutes(app: FastifyInstance, ctx: Context) {
   const params = z.strictObject({ id: uuid });
 
   // -------------------------------------------------------------------------
-  // POST /alunos/cadastro — responsável → aluno → saúde, tudo ou nada.
+  // POST /alunos/cadastro — espelha a ficha em papel do professor.
+  // Payload: acesso → treino → pessoal → responsável (se menor) →
+  // contato_emergencia → saude → termos. Grava responsável → aluno → saúde
+  // numa única transação: tudo ou nada.
   // -------------------------------------------------------------------------
   route(
     app,
@@ -60,9 +69,12 @@ export function cadastroRoutes(app: FastifyInstance, ctx: Context) {
     "/alunos/cadastro",
     { role: STAFF, body: cadastroAlunoSchema },
     async (r, reply, b) => {
-      const { aluno: a, saude: s, responsavel, termos } = b;
+      const { acesso, treino: t, pessoal: a, contato_emergencia: e, saude: s } = b;
+      const { responsavel, termos } = b;
+      // Jiu-Jitsu → faixa/grau; demais → nível (regra já validada no Zod).
+      const g = colunasGraduacao(t);
       // Argon2 fora da transação: não segura conexão/locks durante o hash.
-      const password = await hashPassword(a.senha_inicial);
+      const password = await hashPassword(acesso.senha_inicial);
       const result = await db.transaction(async (tx) => {
         // 1. Responsável (novo ou existente). Se qualquer passo seguinte falhar,
         //    o ROLLBACK desfaz também o responsável recém-criado.
@@ -94,21 +106,23 @@ export function cadastroRoutes(app: FastifyInstance, ctx: Context) {
         const user = await one(
           tx,
           `INSERT INTO users(nome,email,password_hash,role) VALUES($1,$2,$3,'aluno') RETURNING id`,
-          [a.nome, a.email, password],
+          [acesso.nome, acesso.email, password],
         );
         await tx.query(
           `INSERT INTO aluno_profile(
              user_id, modalidade, faixa, graduacao_nivel, data_matricula,
              genero, rg, cpf, data_nascimento, endereco, bairro, cidade, cep, whatsapp,
-             professor_responsavel, responsavel_id, termos_aceitos, termos_aceitos_em, termos_versao)
-           VALUES($1,$2,$3,$4,coalesce($5::date,fn_hoje_sp()),
-             $6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true,now(),$17)`,
+             professor_responsavel, responsavel_id, termos_aceitos, termos_aceitos_em, termos_versao,
+             contato_emergencia_nome, contato_emergencia_parentesco, contato_emergencia_telefone,
+             contato_emergencia_telefone2, autoriza_uso_imagem, autoriza_grupo_whatsapp, nivel)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true,now(),$17,
+             $18,$19,$20,$21,$22,$23,$24)`,
           [
             user.id,
-            a.modalidade,
-            a.faixa,
-            a.graduacao_nivel,
-            a.data_matricula ?? null,
+            t.modalidade,
+            g.faixa,
+            g.graduacao_nivel,
+            t.data_matricula,
             a.genero,
             a.rg,
             a.cpf,
@@ -118,9 +132,16 @@ export function cadastroRoutes(app: FastifyInstance, ctx: Context) {
             a.cidade,
             a.cep,
             a.whatsapp,
-            a.professor_responsavel,
+            t.professor_responsavel,
             responsavelId,
             termos.versao,
+            e.nome,
+            e.parentesco,
+            e.telefone,
+            e.telefone2,
+            termos.autoriza_uso_imagem,
+            termos.autoriza_grupo_whatsapp,
+            g.nivel,
           ],
         );
         // 3. Histórico de saúde (1:1).

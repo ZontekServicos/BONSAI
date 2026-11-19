@@ -27,6 +27,15 @@ export type UserStatus = (typeof USER_STATUS)[number];
 
 export const MODALIDADES = ["boxe", "jiu_jitsu", "muay_thai", "mma"] as const;
 export type Modalidade = (typeof MODALIDADES)[number];
+/** Única modalidade graduada por faixa + grau; as demais usam nível técnico. */
+export const MODALIDADE_COM_FAIXA = "jiu_jitsu" satisfies Modalidade;
+export const NIVEIS_TECNICOS = ["iniciante", "intermediario", "avancado"] as const;
+export type NivelTecnico = (typeof NIVEIS_TECNICOS)[number];
+export const NIVEL_ROTULO: Record<NivelTecnico, string> = {
+  iniciante: "Iniciante",
+  intermediario: "Intermediário",
+  avancado: "Avançado",
+};
 
 export const PAYMENT_STATUS = ["pendente", "pago", "atrasado"] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUS)[number];
@@ -71,8 +80,12 @@ export interface AlunoProfile {
   /** [EXT] número sequencial exibido na carteirinha */
   numero_matricula: number;
   modalidade: Modalidade;
+  /** Jiu-Jitsu: faixa. Demais modalidades: rótulo do nível (espelhado pelo banco). */
   faixa: string;
+  /** Grau da faixa (Jiu-Jitsu); 0 nas demais modalidades. */
   graduacao_nivel: number;
+  /** Nível técnico (fora do Jiu-Jitsu); null no Jiu-Jitsu e em fichas legadas pendentes. */
+  nivel: NivelTecnico | null;
   total_presencas: number;
   data_matricula: ISODate;
 }
@@ -195,10 +208,22 @@ export type FichaAluno = Aluno & {
     cep: string | null;
     whatsapp: string | null;
     professor_responsavel: string | null;
+    idade: number | null;
     menor_de_idade: boolean | null;
+    /** Perfil criado antes da 0006 e ainda sem contato de emergência/nível. */
+    ficha_pendente: boolean;
+    /** Ficha §4 — obrigatório; null só em fichas legadas pendentes. */
+    contato_emergencia: {
+      nome: string;
+      parentesco: string;
+      telefone: string;
+      telefone2: string | null;
+    } | null;
     termos_aceitos: boolean;
     termos_aceitos_em: ISOTimestamp | null;
     termos_versao: string | null;
+    autoriza_uso_imagem: boolean | null;
+    autoriza_grupo_whatsapp: boolean | null;
     responsavel: Responsavel | null;
     saude: HistoricoSaude | null;
     /** Canal de notificação: WhatsApp do aluno, senão o do responsável. */

@@ -51,7 +51,9 @@ async function user(email: string, role = "aluno") {
   );
   if (role === "aluno")
     await db.query(
-      "INSERT INTO aluno_profile(user_id,modalidade,faixa,data_matricula) VALUES($1,'jiu_jitsu','Faixa branca','2020-01-01')",
+      `INSERT INTO aluno_profile(user_id,modalidade,faixa,data_matricula,contato_emergencia_nome,
+         contato_emergencia_parentesco,contato_emergencia_telefone)
+       VALUES($1,'jiu_jitsu','Faixa branca','2020-01-01','Contato Teste','Mãe','5511900000000')`,
       [row.id],
     );
   return row.id as string;
@@ -90,6 +92,7 @@ beforeAll(async () => {
   await db.query(await readFile("database/migrations/0003_search.sql", "utf8"));
   await db.query(await readFile("database/migrations/0004_papeis_modalidades.sql", "utf8"));
   await db.query(await readFile("database/migrations/0005_cadastro_aluno.sql", "utf8"));
+  await db.query(await readFile("database/migrations/0006_ajustes_ficha_professor.sql", "utf8"));
   app = await buildApp(config, db, { logger: false, stream: false });
   await app.ready();
   passwordHash = await hashPassword(password);
@@ -426,8 +429,9 @@ describe("card, attendance and billing", () => {
       email: "new@example.test",
       senha_inicial: password,
       modalidade: "muay_thai",
-      faixa: "Iniciante",
-      data_matricula: "2028-01-31",
+      nivel: "Iniciante",
+      data_matricula: "2026-01-31",
+      contato_emergencia: { nome: "Contato Teste", parentesco: "Pai", telefone: "11988887777" },
       gerar_mensalidades: { valor: "120.00", dia_vencimento: 31, meses: 3 },
     });
     expect(created.statusCode).toBe(201);
@@ -437,13 +441,14 @@ describe("card, attendance and billing", () => {
     ).toBe(3);
     expect(
       (
-        await request("POST", `/alunos/${id}/graduacoes`, {
-          faixa_nova: "Intermediário",
-          graduacao_nova: 1,
-        })
+        await request("POST", `/alunos/${id}/graduacoes`, { nivel_novo: "Intermediário" })
       ).statusCode,
     ).toBe(201);
-    expect((await request("GET", `/alunos/${id}`)).json().perfil.graduacao_nivel).toBe(1);
+    expect((await request("GET", `/alunos/${id}`)).json().perfil).toMatchObject({
+      nivel: "intermediario",
+      faixa: "Intermediário",
+      graduacao_nivel: 0,
+    });
   });
 });
 describe("stock, cash and reports", () => {
@@ -645,7 +650,7 @@ describe("stock, cash and reports", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Fase 1 — cadastro completo (responsável → aluno → saúde) e papel professor
+// Fase 1 — cadastro completo (ficha do professor) e papel professor
 // ---------------------------------------------------------------------------
 let cpfSeq = 100000000;
 /** CPF de teste válido e único (dígitos verificadores calculados). */
@@ -673,31 +678,52 @@ const shift = (iso: string, years: number, days = 0) => {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 };
+type Grupo = Record<string, unknown>;
+type Ficha = {
+  acesso: Grupo & { email: string };
+  treino: Grupo;
+  pessoal: Grupo & { cpf: string };
+  [k: string]: unknown;
+};
 let seq = 0;
+/** Payload válido na ordem da ficha; `o` sobrescreve campos de cada grupo. */
 function cadastro(
-  aluno: Record<string, unknown> = {},
+  o: { acesso?: Grupo; treino?: Grupo; pessoal?: Grupo } = {},
   extra: Record<string, unknown> = {},
-): Record<string, unknown> & { aluno: { cpf: string; email: string } } {
+): Ficha {
   seq++;
   return {
-    aluno: {
+    acesso: {
       nome: "Ana Lutadora",
       email: `ana${seq}@example.test`,
       senha_inicial: "senha-inicial-123",
+      ...o.acesso,
+    } as Grupo & { email: string },
+    treino: {
+      modalidade: "jiu_jitsu",
+      faixa: "Faixa branca",
+      grau: 1,
+      data_matricula: "2025-02-10",
+      professor_responsavel: "Prof. Teste",
+      ...o.treino,
+    },
+    pessoal: {
+      cpf: gerarCpf(),
+      whatsapp: "(11) 98765-4321",
+      data_nascimento: "1995-05-20",
       genero: "feminino",
       rg: "12.345.678-9",
-      cpf: gerarCpf(),
-      data_nascimento: "1995-05-20",
       endereco: "Rua do Tatame, 10",
       bairro: "Centro",
       cidade: "São Paulo",
       cep: "01001-000",
-      whatsapp: "(11) 98765-4321",
-      modalidade: "mma",
-      faixa: "Faixa branca",
-      professor_responsavel: "Prof. Teste",
-      ...aluno,
-    } as { cpf: string; email: string },
+      ...o.pessoal,
+    } as Grupo & { cpf: string },
+    contato_emergencia: {
+      nome: "Carlos Contato",
+      parentesco: "Irmão",
+      telefone: "(11) 97777-6666",
+    },
     saude: {
       tipo_sanguineo: "O+",
       condicoes_medicas: "Asma leve",
@@ -705,7 +731,12 @@ function cadastro(
       medicacao_continua: null,
       artes_marciais_anteriores: "Judô",
     },
-    termos: { aceito: true, versao: "2026-11" },
+    termos: {
+      aceito: true,
+      versao: "2026-11",
+      autoriza_uso_imagem: true,
+      autoriza_grupo_whatsapp: false,
+    },
     ...extra,
   };
 }
@@ -730,22 +761,40 @@ describe("student registration (phase 1) and professor role", () => {
   const register = (body: unknown, token?: string) =>
     request("POST", "/alunos/cadastro", body, token ?? professorToken);
 
-  it("registers an adult atomically, normalizes input and restricts the record to staff and the student", async () => {
+  it("registers an adult atomically from the paper form, normalizes input and restricts the record", async () => {
     const body = cadastro();
     const res = await register(body);
     expect(res.statusCode).toBe(201);
     const created = res.json();
-    expect(created.perfil.modalidade).toBe("mma");
+    // dados operacionais da ficha do professor
+    expect(created.perfil).toMatchObject({
+      modalidade: "jiu_jitsu",
+      faixa: "Faixa branca",
+      graduacao_nivel: 1,
+      nivel: null,
+      data_matricula: "2025-02-10",
+    });
     expect(created.ficha).toMatchObject({
-      cpf: body.aluno.cpf,
+      cpf: body.pessoal.cpf,
       cep: "01001000",
       whatsapp: "5511987654321",
+      professor_responsavel: "Prof. Teste",
       menor_de_idade: false,
       responsavel: null,
+      contato_emergencia: {
+        nome: "Carlos Contato",
+        parentesco: "Irmão",
+        telefone: "5511977776666",
+        telefone2: null,
+      },
       termos_aceitos: true,
       termos_versao: "2026-11",
+      ficha_pendente: false,
+      autoriza_uso_imagem: true,
+      autoriza_grupo_whatsapp: false,
       contato_principal: { whatsapp: "5511987654321", origem: "aluno" },
     });
+    expect(created.ficha.idade).toBeGreaterThanOrEqual(31);
     expect(created.ficha.saude).toMatchObject({
       tipo_sanguineo: "O+",
       lesoes_cronicas: null,
@@ -766,12 +815,15 @@ describe("student registration (phase 1) and professor role", () => {
     expect((await request("GET", path, undefined, own)).statusCode).toBe(200);
     // listagem nunca carrega CPF nem saúde
     const list = (await request("GET", "/alunos?page_size=100")).body;
-    expect(list).not.toContain(body.aluno.cpf);
+    expect(list).not.toContain(body.pessoal.cpf);
     expect(list).not.toContain("Asma leve");
   });
 
   it("requires a guardian for minors, falls back to the guardian WhatsApp and links siblings", async () => {
-    const minor = { data_nascimento: shift(todaySP(), -12), whatsapp: null };
+    const minor = {
+      pessoal: { data_nascimento: shift(todaySP(), -12), whatsapp: null },
+      treino: { data_matricula: todaySP() },
+    };
     const missing = await register(cadastro(minor));
     expect(missing.statusCode).toBe(400);
     expect(JSON.stringify(missing.json().error.details)).toContain("responsavel");
@@ -780,6 +832,7 @@ describe("student registration (phase 1) and professor role", () => {
     expect(first.statusCode).toBe(201);
     const f = first.json().ficha;
     expect(f.menor_de_idade).toBe(true);
+    expect(f.idade).toBe(12);
     expect(f.responsavel).toMatchObject({
       nome: "Maria Responsável",
       whatsapp: "5511912345678",
@@ -790,9 +843,7 @@ describe("student registration (phase 1) and professor role", () => {
     const sibling = await register(cadastro(minor, { responsavel: { id: f.responsavel.id } }));
     expect(sibling.statusCode).toBe(201);
     expect(sibling.json().ficha.responsavel.id).toBe(f.responsavel.id);
-    const search = (
-      await request("GET", "/responsaveis?q=maria", undefined, professorToken)
-    ).json();
+    const search = (await request("GET", "/responsaveis?q=maria", undefined, professorToken)).json();
     expect(search.data).toEqual([expect.objectContaining({ id: f.responsavel.id, alunos: 2 })]);
     // busca por nome sem dígitos não pode casar com todos pelo telefone
     expect(
@@ -804,11 +855,98 @@ describe("student registration (phase 1) and professor role", () => {
   });
 
   it("treats the 18th birthday as adult (America/Sao_Paulo date)", async () => {
-    const adult = await register(cadastro({ data_nascimento: shift(todaySP(), -18) }));
+    const at18 = shift(todaySP(), -18);
+    const adult = await register(
+      cadastro({ pessoal: { data_nascimento: at18 }, treino: { data_matricula: todaySP() } }),
+    );
     expect(adult.statusCode).toBe(201);
     expect(adult.json().ficha.menor_de_idade).toBe(false);
     const dayBefore18 = shift(todaySP(), -18, 1);
-    expect((await register(cadastro({ data_nascimento: dayBefore18 }))).statusCode).toBe(400);
+    expect(
+      (
+        await register(
+          cadastro({
+            pessoal: { data_nascimento: dayBefore18 },
+            treino: { data_matricula: todaySP() },
+          }),
+        )
+      ).statusCode,
+    ).toBe(400);
+  });
+
+  it("enforces the enrollment date and modality rules of the professor's form", async () => {
+    const tomorrow = shift(todaySP(), 0, 1);
+    for (const treino of [
+      { data_matricula: tomorrow },
+      { data_matricula: "1990-01-01" }, // antes do nascimento (1995)
+      { data_matricula: undefined },
+      { modalidade: "karate" },
+      { modalidade: undefined },
+      { faixa: "" },
+      { grau: undefined },
+      { grau: -1 },
+    ]) {
+      const res = await register(cadastro({ treino }));
+      expect(res.statusCode, JSON.stringify(treino)).toBe(400);
+    }
+    const bad = (await register(cadastro({ treino: { modalidade: "karate" } }))).json();
+    expect(JSON.stringify(bad.error.details)).toContain("boxe, jiu_jitsu, muay_thai, mma");
+    // hoje é válido
+    expect((await register(cadastro({ treino: { data_matricula: todaySP() } }))).statusCode).toBe(
+      201,
+    );
+    // cadastro simples (legado) também recusa matrícula futura
+    const legacy = await request("POST", "/alunos", {
+      nome: "Legado Futuro",
+      email: "legado.futuro@example.test",
+      senha_inicial: password,
+      modalidade: "boxe",
+      nivel: "iniciante",
+      data_matricula: tomorrow,
+      contato_emergencia: { nome: "Contato Teste", parentesco: "Pai", telefone: "11988887777" },
+    });
+    expect(legacy.statusCode).toBe(400);
+    // última linha de defesa no banco
+    await expect(
+      db.query("UPDATE aluno_profile SET data_matricula=fn_hoje_sp()+1 WHERE user_id=$1", [
+        student,
+      ]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_matricula" });
+  });
+
+  it("requires emergency contact and explicit image/WhatsApp-group answers", async () => {
+    const base = cadastro();
+    for (const extra of [
+      { contato_emergencia: undefined },
+      { contato_emergencia: { nome: "X Y", parentesco: "Irmão", telefone: "123" } },
+      { termos: { aceito: true, versao: "2026-11", autoriza_uso_imagem: true } },
+      {
+        termos: {
+          aceito: false,
+          versao: "2026-11",
+          autoriza_uso_imagem: true,
+          autoriza_grupo_whatsapp: true,
+        },
+      },
+    ]) {
+      const res = await register({ ...base, ...extra });
+      expect(res.statusCode, JSON.stringify(extra)).toBe(400);
+    }
+    const two = await register(
+      cadastro(
+        {},
+        {
+          contato_emergencia: {
+            nome: "Carlos Contato",
+            parentesco: "Irmão",
+            telefone: "11977776666",
+            telefone2: "(11) 3222-1111",
+          },
+        },
+      ),
+    );
+    expect(two.statusCode).toBe(201);
+    expect(two.json().ficha.contato_emergencia.telefone2).toBe("551132221111");
   });
 
   it("rolls back the new guardian and user when a later step fails", async () => {
@@ -817,14 +955,17 @@ describe("student registration (phase 1) and professor role", () => {
     const before = [await count("responsaveis"), await count("users")];
     const dupCpf = await register(
       cadastro(
-        { cpf: taken.aluno.cpf, data_nascimento: shift(todaySP(), -10) },
+        {
+          pessoal: { cpf: taken.pessoal.cpf, data_nascimento: shift(todaySP(), -10) },
+          treino: { data_matricula: todaySP() },
+        },
         { responsavel: guardian },
       ),
     );
     expect(dupCpf.statusCode).toBe(409);
     expect(dupCpf.json().error.code).toBe("CPF_JA_CADASTRADO");
     const dupEmail = await register(
-      cadastro({ email: taken.aluno.email }, { responsavel: guardian }),
+      cadastro({ acesso: { email: taken.acesso.email } }, { responsavel: guardian }),
     );
     expect(dupEmail.statusCode).toBe(409);
     expect(dupEmail.json().error.code).toBe("EMAIL_JA_CADASTRADO");
@@ -832,18 +973,18 @@ describe("student registration (phase 1) and professor role", () => {
   });
 
   it("rejects invalid input and enforces CPF, minor and terms rules in the database", async () => {
-    for (const aluno of [
+    for (const pessoal of [
       { cpf: "111.111.111-11" },
       { cpf: "529.982.247-26" },
       { data_nascimento: shift(todaySP(), 0, 1) },
       { cep: "123" },
       { whatsapp: "123" },
-      { modalidade: "karate" },
     ])
-      expect((await register(cadastro(aluno))).statusCode, JSON.stringify(aluno)).toBe(400);
-    expect(
-      (await register({ ...cadastro(), termos: { aceito: false, versao: "2026-11" } })).statusCode,
-    ).toBe(400);
+      expect((await register(cadastro({ pessoal }))).statusCode, JSON.stringify(pessoal)).toBe(
+        400,
+      );
+    // formato antigo (tudo dentro de "aluno") não é mais aceito
+    expect((await register({ aluno: cadastro().pessoal })).statusCode).toBe(400);
     // última linha de defesa: mesmo por SQL direto
     await expect(
       db.query("UPDATE aluno_profile SET data_nascimento=fn_hoje_sp()-3650 WHERE user_id=$1", [
@@ -856,6 +997,103 @@ describe("student registration (phase 1) and professor role", () => {
     await expect(
       db.query("UPDATE aluno_profile SET termos_aceitos=true WHERE user_id=$1", [student]),
     ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      db.query(
+        `UPDATE aluno_profile SET termos_aceitos=true, termos_aceitos_em=now(), termos_versao='x'
+          WHERE user_id=$1`,
+        [student],
+      ),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_autorizacoes" });
+    await expect(
+      db.query("UPDATE aluno_profile SET contato_emergencia_telefone=NULL WHERE user_id=$1", [
+        student,
+      ]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_emergencia_obrigatoria" });
+  });
+
+  it("uses belt + degree for Jiu-Jitsu and Iniciante/Intermediário/Avançado for other modalities", async () => {
+    // Boxe: nível aceito com ou sem acento; faixa espelha o rótulo; grau = 0
+    const boxe = await register(
+      cadastro({ treino: { modalidade: "boxe", faixa: undefined, grau: undefined, nivel: "Intermediário" } }),
+    );
+    expect(boxe.statusCode).toBe(201);
+    expect(boxe.json().perfil).toMatchObject({
+      modalidade: "boxe",
+      nivel: "intermediario",
+      faixa: "Intermediário",
+      graduacao_nivel: 0,
+    });
+    const semFaixa = { faixa: undefined, grau: undefined };
+    for (const treino of [
+      { modalidade: "boxe", ...semFaixa }, // sem nível
+      { modalidade: "muay_thai", ...semFaixa, nivel: "Expert" }, // fora da lista
+      { modalidade: "mma", grau: undefined, nivel: "avancado" }, // faixa em modalidade de nível
+      { modalidade: "boxe", faixa: undefined, nivel: "avancado" }, // grau em modalidade de nível
+      { modalidade: "jiu_jitsu", nivel: "avancado" }, // nível no Jiu-Jitsu
+      { modalidade: "jiu_jitsu", faixa: undefined }, // Jiu-Jitsu sem faixa
+    ]) {
+      const res = await register(cadastro({ treino }));
+      expect(res.statusCode, JSON.stringify(treino)).toBe(400);
+    }
+    const id = boxe.json().id;
+    // promoção respeita a modalidade atual
+    const promo = (b: unknown) => request("POST", `/alunos/${id}/graduacoes`, b, professorToken);
+    expect((await promo({ faixa_nova: "Azul", graduacao_nova: 1 })).statusCode).toBe(400);
+    const up = await promo({ nivel_novo: "Avançado" });
+    expect(up.statusCode).toBe(201);
+    expect(up.json()).toMatchObject({ faixa_nova: "Avançado", graduacao_nova: 0 });
+    // troca de modalidade exige a graduação da nova modalidade
+    const patch = (b: unknown) => request("PATCH", `/alunos/${id}`, b);
+    expect((await patch({ modalidade: "jiu_jitsu" })).statusCode).toBe(400);
+    expect((await patch({ faixa: "Azul", grau: 1 })).statusCode).toBe(400);
+    const jj = await patch({ modalidade: "jiu_jitsu", faixa: "Azul", grau: 1 });
+    expect(jj.statusCode).toBe(200);
+    expect(jj.json().perfil).toMatchObject({ faixa: "Azul", graduacao_nivel: 1, nivel: null });
+    // banco: Jiu-Jitsu não aceita nível; outras modalidades exigem nível
+    await expect(
+      db.query("UPDATE aluno_profile SET nivel='iniciante' WHERE user_id=$1", [id]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_nivel_modalidade" });
+    await expect(
+      db.query("UPDATE aluno_profile SET modalidade='boxe' WHERE user_id=$1", [id]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_nivel_modalidade" });
+  });
+
+  it("makes the emergency contact mandatory in every creation path (BLK-02)", async () => {
+    const legado = {
+      nome: "Legado",
+      email: "legado.emergencia@example.test",
+      senha_inicial: password,
+      modalidade: "jiu_jitsu",
+      faixa: "Branca",
+      grau: 0,
+    };
+    expect((await request("POST", "/alunos", legado)).statusCode).toBe(400);
+    const ok = await request("POST", "/alunos", {
+      ...legado,
+      contato_emergencia: { nome: "Mãe Legado", parentesco: "Mãe", telefone: "(11) 95555-4444" },
+    });
+    expect(ok.statusCode).toBe(201);
+    const ficha = (await request("GET", `/alunos/${ok.json().id}/ficha`)).json().ficha;
+    expect(ficha).toMatchObject({
+      ficha_pendente: false,
+      contato_emergencia: { nome: "Mãe Legado", telefone: "5511955554444" },
+    });
+    // SQL direto: perfil novo sem emergência é recusado, e não dá para "se marcar" legado
+    const u = await one(
+      db,
+      "INSERT INTO users(nome,email,password_hash,role) VALUES('Sem Contato','sem@example.test','x','aluno') RETURNING id",
+    );
+    await expect(
+      db.query("INSERT INTO aluno_profile(user_id,modalidade,faixa) VALUES($1,'jiu_jitsu','Branca')", [
+        u.id,
+      ]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_emergencia_obrigatoria" });
+    await expect(
+      db.query(
+        "INSERT INTO aluno_profile(user_id,modalidade,faixa,ficha_pendente) VALUES($1,'jiu_jitsu','Branca',true)",
+        [u.id],
+      ),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_emergencia_obrigatoria" });
   });
 
   it("gives professors students, graduations and attendance but no finance, cash, store or dashboard", async () => {
@@ -924,7 +1162,9 @@ describe("student registration (phase 1) and professor role", () => {
         "",
       )
     ).json().access_token;
-    expect((await request("GET", "/auth/me", undefined, token)).json().user.role).toBe("professor");
+    expect((await request("GET", "/auth/me", undefined, token)).json().user.role).toBe(
+      "professor",
+    );
     expect((await request("GET", "/professores")).json()).toHaveLength(2);
     const off = await request("PATCH", `/professores/${created.json().id}/status`, {
       status: "inativo",
@@ -934,5 +1174,98 @@ describe("student registration (phase 1) and professor role", () => {
     // a rota de professores não altera alunos
     const wrong = await request("PATCH", `/professores/${student}/status`, { status: "inativo" });
     expect(wrong.statusCode).toBe(404);
+  });
+});
+
+describe("migrations", () => {
+  it("never changes a published migration (checksums of the deployed files)", async () => {
+    const { createHash } = await import("node:crypto");
+    const published: Record<string, string> = {
+      "schema.sql": "292e0a9db5615cc5729d25109382a0226fdb213dd91d32f15168a30b8eca11f7",
+      "migrations/0002_runtime.sql": "e87aa24d6ee1923c6576b55f9bc465af84f9b64dc74627ece42033a3c242458e",
+      "migrations/0003_search.sql": "715febe997596745076107a10766f08ce908523fb588ce04a72313a31ed123c1",
+      "migrations/0004_papeis_modalidades.sql":
+        "0638c6b4726347402fcd2f0137a3ef70a046d235712a4f356a9b956c45655c66",
+      // 0005 publicada no commit 54e215e
+      "migrations/0005_cadastro_aluno.sql":
+        "0d4d147d2ad0e3e4d6e9580b7b703793b7e58e31ac22ff954f15504a6d81e4b3",
+    };
+    for (const [name, sum] of Object.entries(published)) {
+      const raw = (await readFile(`database/${name}`, "utf8")).replace(/\r\n/g, "\n");
+      expect(createHash("sha256").update(raw).digest("hex"), name).toBe(sum);
+    }
+  });
+
+  it("upgrades a 0005 database: legacy profiles become pending, keep working and can be completed", async () => {
+    const up = `bonsai_upgrade_${randomUUID().replaceAll("-", "")}`;
+    const c = new pg.Client({ connectionString: testURL });
+    await c.connect();
+    try {
+      await c.query(`CREATE SCHEMA ${up}`);
+      // pg_trgm foi instalada no schema da suíte; deixa-o visível depois do novo.
+      await c.query(`SET search_path=${up},${schema},public`);
+      for (const name of [
+        "schema.sql",
+        "migrations/0002_runtime.sql",
+        "migrations/0003_search.sql",
+        "migrations/0004_papeis_modalidades.sql",
+        "migrations/0005_cadastro_aluno.sql",
+      ])
+        await c.query(await readFile(`database/${name}`, "utf8"));
+      // Estado de produção na 0005: um aluno de Jiu-Jitsu e um de Boxe sem contato.
+      const ids: Record<string, string> = {};
+      for (const [k, modalidade, faixa] of [
+        ["jj", "jiu_jitsu", "Azul"],
+        ["boxe", "boxe", "Iniciante"],
+      ]) {
+        ids[k] = (
+          await c.query(
+            `INSERT INTO users(nome,email,password_hash,role) VALUES($1,$2,'x','aluno') RETURNING id`,
+            [k, `${k}@legado.test`],
+          )
+        ).rows[0].id;
+        await c.query("INSERT INTO aluno_profile(user_id,modalidade,faixa) VALUES($1,$2,$3)", [
+          ids[k],
+          modalidade,
+          faixa,
+        ]);
+      }
+      await c.query(await readFile("database/migrations/0006_ajustes_ficha_professor.sql", "utf8"));
+      const pend = async (id: string) =>
+        (await c.query("SELECT * FROM aluno_profile WHERE user_id=$1", [id])).rows[0];
+      expect((await pend(ids.jj)).ficha_pendente).toBe(true);
+      expect((await pend(ids.boxe)).ficha_pendente).toBe(true);
+      // legado continua operando (ex.: contador de presença)
+      await c.query("UPDATE aluno_profile SET total_presencas=total_presencas+1 WHERE user_id=$1", [
+        ids.jj,
+      ]);
+      // não dá para tirar a pendência sem completar a ficha
+      await expect(
+        c.query("UPDATE aluno_profile SET ficha_pendente=false WHERE user_id=$1", [ids.jj]),
+      ).rejects.toMatchObject({ code: "23514" });
+      const contato = `contato_emergencia_nome='Pai',contato_emergencia_parentesco='Pai',
+        contato_emergencia_telefone='5511900000000'`;
+      // Jiu-Jitsu: completar o contato encerra a pendência
+      await c.query(`UPDATE aluno_profile SET ${contato} WHERE user_id=$1`, [ids.jj]);
+      expect((await pend(ids.jj)).ficha_pendente).toBe(false);
+      // …e depois o contato não pode mais ser removido
+      await expect(
+        c.query("UPDATE aluno_profile SET contato_emergencia_telefone=NULL WHERE user_id=$1", [
+          ids.jj,
+        ]),
+      ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_emergencia_obrigatoria" });
+      // Boxe: só o contato não basta; falta o nível
+      await c.query(`UPDATE aluno_profile SET ${contato} WHERE user_id=$1`, [ids.boxe]);
+      expect((await pend(ids.boxe)).ficha_pendente).toBe(true);
+      await c.query("UPDATE aluno_profile SET nivel='avancado' WHERE user_id=$1", [ids.boxe]);
+      expect(await pend(ids.boxe)).toMatchObject({
+        ficha_pendente: false,
+        faixa: "Avançado",
+        graduacao_nivel: 0,
+      });
+    } finally {
+      await c.query(`DROP SCHEMA IF EXISTS ${up} CASCADE`);
+      await c.end();
+    }
   });
 });

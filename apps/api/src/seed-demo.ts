@@ -70,9 +70,11 @@ try {
   const profile = `
     INSERT INTO aluno_profile(user_id, modalidade, faixa, graduacao_nivel, genero, rg, cpf,
       data_nascimento, endereco, bairro, cidade, cep, whatsapp, professor_responsavel,
-      responsavel_id, termos_aceitos, termos_aceitos_em, termos_versao)
+      responsavel_id, termos_aceitos, termos_aceitos_em, termos_versao,
+      contato_emergencia_nome, contato_emergencia_parentesco, contato_emergencia_telefone,
+      autoriza_uso_imagem, autoriza_grupo_whatsapp, nivel)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Rua do Dojo, 100', 'Centro', 'São Paulo', '01001000',
-      $9, $10, $11, true, now(), $12)
+      $9, $10, $11, true, now(), $12, $13, $14, $15, true, $16, $17)
     ON CONFLICT (user_id) DO UPDATE SET
       genero = EXCLUDED.genero, rg = EXCLUDED.rg, cpf = EXCLUDED.cpf,
       data_nascimento = EXCLUDED.data_nascimento, endereco = EXCLUDED.endereco,
@@ -80,7 +82,13 @@ try {
       whatsapp = EXCLUDED.whatsapp, professor_responsavel = EXCLUDED.professor_responsavel,
       responsavel_id = EXCLUDED.responsavel_id, termos_aceitos = true,
       termos_aceitos_em = coalesce(aluno_profile.termos_aceitos_em, now()),
-      termos_versao = EXCLUDED.termos_versao`;
+      termos_versao = EXCLUDED.termos_versao,
+      contato_emergencia_nome = EXCLUDED.contato_emergencia_nome,
+      contato_emergencia_parentesco = EXCLUDED.contato_emergencia_parentesco,
+      contato_emergencia_telefone = EXCLUDED.contato_emergencia_telefone,
+      autoriza_uso_imagem = EXCLUDED.autoriza_uso_imagem,
+      autoriza_grupo_whatsapp = EXCLUDED.autoriza_grupo_whatsapp,
+      nivel = EXCLUDED.nivel`;
   // Adulto, com WhatsApp próprio.
   await client.query(profile, [
     alunoId,
@@ -95,6 +103,11 @@ try {
     professor.nome,
     null,
     TERMOS_VERSAO_ATUAL,
+    "Contato Emergência Demo",
+    "Cônjuge",
+    "5511900000003",
+    true,
+    null, // Jiu-Jitsu: faixa + grau
   ]);
   // Menor: sem WhatsApp próprio ⇒ o do responsável é o canal principal.
   await client.query(profile, [
@@ -110,6 +123,11 @@ try {
     professor.nome,
     responsavelId,
     TERMOS_VERSAO_ATUAL,
+    "Responsável Demo",
+    "Mãe",
+    "5511900000002",
+    false,
+    "iniciante", // Muay Thai: nível (faixa vira "Iniciante")
   ]);
   const saude = `
     INSERT INTO historico_saude(user_id, tipo_sanguineo, condicoes_medicas, lesoes_cronicas,

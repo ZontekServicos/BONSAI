@@ -22,6 +22,7 @@ import {
   brl,
   day,
   time,
+  graduacaoTexto,
 } from "./ui";
 
 export function Member() {
@@ -134,7 +135,7 @@ export function Member() {
               <div>
                 <span>GRADUAÇÃO</span>
                 <strong>
-                  {profile.data.perfil.faixa} · {profile.data.perfil.graduacao_nivel}º grau
+                  {graduacaoTexto(profile.data.perfil)}
                 </strong>
               </div>
               <div>

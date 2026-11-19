@@ -1,6 +1,13 @@
 import { useEffect, useState, type ReactNode, type FormEvent } from "react";
 import { api, errorMessage } from "../lib/api";
-import { MODALIDADES, METODOS_PAGAMENTO } from "../types/contract";
+import {
+  MODALIDADES,
+  METODOS_PAGAMENTO,
+  MODALIDADE_COM_FAIXA,
+  NIVEIS_TECNICOS,
+  NIVEL_ROTULO,
+  type AlunoProfile,
+} from "../types/contract";
 
 export const labels: Record<string, string> = {
   jiu_jitsu: "Jiu-Jitsu",
@@ -23,6 +30,10 @@ export const labels: Record<string, string> = {
   saida: "Saída",
 };
 export const modalities = MODALIDADES.map((value) => ({ value, label: labels[value] }));
+export const niveis = NIVEIS_TECNICOS.map((value) => ({ value, label: NIVEL_ROTULO[value] }));
+/** Jiu-Jitsu: "Azul · 2º grau". Demais modalidades: só o nível ("Intermediário"). */
+export const graduacaoTexto = (p: Pick<AlunoProfile, "modalidade" | "faixa" | "graduacao_nivel">) =>
+  p.modalidade === MODALIDADE_COM_FAIXA ? `${p.faixa} · ${p.graduacao_nivel}º grau` : p.faixa;
 export const methods = METODOS_PAGAMENTO.map((value) => ({ value, label: labels[value] }));
 export const brl = (v: string) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(v));

@@ -16,12 +16,13 @@ try {
     "database/migrations/0003_search.sql",
     "database/migrations/0004_papeis_modalidades.sql",
     "database/migrations/0005_cadastro_aluno.sql",
+    "database/migrations/0006_ajustes_ficha_professor.sql",
   ])
     await client.query(await readFile(path, "utf8"));
   await client.query(`INSERT INTO users(nome,email,password_hash,role)
     SELECT 'Aluno '||n, 'aluno'||n||'@performance.test','test-only-no-login','aluno' FROM generate_series(1,5000) n`);
   await client.query(
-    `INSERT INTO aluno_profile(user_id,modalidade,faixa) SELECT id,'jiu_jitsu','branca' FROM users`,
+    `INSERT INTO aluno_profile(user_id,modalidade,faixa,contato_emergencia_nome,contato_emergencia_parentesco,contato_emergencia_telefone) SELECT id,'jiu_jitsu','branca','Contato','Mãe','5511900000000' FROM users`,
   );
   await client.query(`INSERT INTO attendance(user_id,check_in,check_out)
     SELECT id,now()-interval '1 hour',CASE WHEN row_number() OVER()<=5 THEN null ELSE now() END FROM users`);

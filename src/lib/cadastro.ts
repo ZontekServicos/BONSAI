@@ -3,11 +3,18 @@
  *
  * A API (POST /api/v1/alunos/cadastro) valida com `cadastroAlunoSchema`;
  * o formulário multi-etapas da Fase 2 reutiliza os mesmos schemas por etapa
- * (dadosAlunoSchema → saudeSchema → responsavelSchema → termosSchema).
- * O banco repete as regras críticas (CPF, menoridade) como última defesa.
+ * (acesso → treino → pessoal → responsável → emergência → saúde → termos).
+ * O banco repete as regras críticas (CPF, menoridade, matrícula) como última defesa.
  */
 import { z } from "zod";
-import { MODALIDADES } from "../types/contract";
+import {
+  MODALIDADES,
+  MODALIDADE_COM_FAIXA,
+  NIVEIS_TECNICOS,
+  NIVEL_ROTULO,
+  type Modalidade,
+  type NivelTecnico,
+} from "../types/contract";
 
 export const MAIORIDADE = 18;
 /** Versão vigente dos termos (regulamento, uso de imagem, LGPD/saúde). */
@@ -83,41 +90,122 @@ export const dataNascimentoSchema = z.iso
   .refine((d) => d >= "1900-01-01", "Data de nascimento inválida.")
   .refine((d) => d <= hojeSP(), "Data de nascimento no futuro.");
 
+/** Data de matrícula: não pode ser futura (a anterioridade ao nascimento é checada no cadastro). */
+export const dataMatriculaSchema = z.iso
+  .date("Data inválida.")
+  .refine((d) => d >= "1900-01-01", "Data de matrícula inválida.")
+  .refine((d) => d <= hojeSP(), "Data de matrícula não pode ser futura.");
+
+/** Modalidades da ficha: Jiu-Jitsu, Muay Thai, Boxe, MMA (mesma lista do enum do banco). */
+export const modalidadeSchema = z.enum(MODALIDADES, {
+  error: `Modalidade inválida. Opções: ${MODALIDADES.join(", ")}.`,
+});
+
 // ----------------------------------------------------------------------------
-// Etapas do cadastro
+// Nível por modalidade
+//   Jiu-Jitsu          → faixa + grau obrigatórios, sem nível
+//   Boxe, Muay Thai, MMA → nível ∈ Iniciante | Intermediário | Avançado, sem faixa/grau
+// O banco repete a regra (ck_aluno_nivel_modalidade) e espelha o rótulo do
+// nível em `faixa` para quem só lê a faixa (listas, carteirinha).
 // ----------------------------------------------------------------------------
-export const dadosAlunoSchema = z.strictObject({
+const semAcento = (v: unknown) =>
+  typeof v === "string"
+    ? v
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .trim()
+        .toLowerCase()
+    : v;
+
+/** Aceita "Intermediário", "intermediario", " AVANÇADO "… e grava o código. */
+export const nivelSchema = z.preprocess(
+  semAcento,
+  z.enum(NIVEIS_TECNICOS, {
+    error: "Nível inválido. Opções: Iniciante, Intermediário, Avançado.",
+  }),
+);
+
+/** Campos de graduação: cada modalidade usa um subconjunto (ver validação abaixo). */
+export const graduacaoCampos = {
+  /** Jiu-Jitsu: faixa atual (ex.: "Faixa branca", "Azul"). */
+  faixa: texto(40).optional(),
+  /** Jiu-Jitsu: grau dentro da faixa (0 = sem grau, 1 = 1º grau…). */
+  grau: z.number("Grau deve ser um número.").int().min(0).max(20).optional(),
+  /** Boxe, Muay Thai e MMA: nível técnico. */
+  nivel: nivelSchema.optional(),
+};
+
+type Graduacao = { modalidade: Modalidade; faixa?: string; grau?: number; nivel?: NivelTecnico };
+
+export function validarNivelPorModalidade(
+  t: Graduacao,
+  ctx: z.RefinementCtx,
+  path: PropertyKey[] = [],
+) {
+  const erro = (campo: string, message: string) =>
+    ctx.addIssue({ code: "custom", path: [...path, campo], message });
+  if (t.modalidade === MODALIDADE_COM_FAIXA) {
+    if (t.faixa === undefined) erro("faixa", "Jiu-Jitsu exige a faixa.");
+    if (t.grau === undefined) erro("grau", "Jiu-Jitsu exige o grau.");
+    if (t.nivel !== undefined) erro("nivel", "Jiu-Jitsu usa faixa e grau, não nível.");
+  } else {
+    if (t.nivel === undefined)
+      erro("nivel", "Informe o nível: Iniciante, Intermediário ou Avançado.");
+    if (t.faixa !== undefined) erro("faixa", "Esta modalidade usa nível, não faixa.");
+    if (t.grau !== undefined) erro("grau", "Esta modalidade usa nível, não grau.");
+  }
+}
+
+/** Converte a graduação validada nas colunas do banco. */
+export function colunasGraduacao(t: Graduacao) {
+  return t.modalidade === MODALIDADE_COM_FAIXA
+    ? { faixa: t.faixa!, graduacao_nivel: t.grau!, nivel: null }
+    : { faixa: NIVEL_ROTULO[t.nivel!], graduacao_nivel: 0, nivel: t.nivel! };
+}
+
+/** Graduação isolada (troca de modalidade no PATCH /alunos/:id). */
+export const graduacaoSchema = z
+  .strictObject({ modalidade: modalidadeSchema, ...graduacaoCampos })
+  .superRefine((t, ctx) => validarNivelPorModalidade(t, ctx));
+
+// ----------------------------------------------------------------------------
+// Grupos do cadastro, na ordem da ficha do professor:
+//   acesso → treino → pessoal → responsável (se menor) → emergência → saúde → termos
+// ----------------------------------------------------------------------------
+
+/** 1. Dados de acesso (login do aluno). */
+export const acessoSchema = z.strictObject({
   nome: texto(120).refine((v) => v.length >= 2, "Informe o nome completo."),
   email: z.email("E-mail inválido.").max(254),
   senha_inicial: z.string().min(8, "Mínimo de 8 caracteres.").max(128),
+});
+
+/** 2. Dados operacionais — "Dados do treino" da ficha. */
+export const treinoSchema = z
+  .strictObject({
+    modalidade: modalidadeSchema,
+    ...graduacaoCampos,
+    data_matricula: dataMatriculaSchema,
+    /** Professor(a) responsável pela turma. */
+    professor_responsavel: texto(120),
+  })
+  .superRefine((t, ctx) => validarNivelPorModalidade(t, ctx));
+
+/** 3. Dados pessoais de "blindagem" (identificação e contato). */
+export const pessoalSchema = z.strictObject({
+  cpf: cpfSchema,
+  /** Opcional: sem ele, o WhatsApp do responsável vira o canal principal. */
+  whatsapp: telefoneSchema.nullish().transform((v) => v ?? null),
+  data_nascimento: dataNascimentoSchema,
   genero: z.enum(GENEROS),
   rg: texto(20),
-  cpf: cpfSchema,
-  data_nascimento: dataNascimentoSchema,
   endereco: texto(200),
   bairro: texto(80),
   cidade: texto(80),
   cep: cepSchema,
-  /** Opcional: sem ele, o WhatsApp do responsável vira o canal principal. */
-  whatsapp: telefoneSchema.nullish().transform((v) => v ?? null),
-  modalidade: z.enum(MODALIDADES),
-  faixa: texto(40),
-  graduacao_nivel: z.number().int().min(0).max(20).default(0),
-  professor_responsavel: texto(120),
-  data_matricula: z.iso.date().optional(),
 });
 
-export const saudeSchema = z.strictObject({
-  tipo_sanguineo: z
-    .enum(TIPOS_SANGUINEOS)
-    .nullish()
-    .transform((v) => v ?? null),
-  condicoes_medicas: textoLivre,
-  lesoes_cronicas: textoLivre,
-  medicacao_continua: textoLivre,
-  artes_marciais_anteriores: textoLivre,
-});
-
+/** 4. Responsável legal ("Nome do Pai/Mãe (se menor)"). */
 export const novoResponsavelSchema = z.strictObject({
   nome: texto(120).refine((v) => v.length >= 2, "Informe o nome completo."),
   parentesco: z.enum(PARENTESCOS),
@@ -132,24 +220,58 @@ export const novoResponsavelSchema = z.strictObject({
 /** Novo responsável OU vínculo a um já cadastrado (irmãos). */
 export const responsavelSchema = z.union([z.strictObject({ id: z.uuid() }), novoResponsavelSchema]);
 
+/** 5. Contato de emergência — ficha §4, obrigatório para todo aluno. */
+export const contatoEmergenciaSchema = z.strictObject({
+  nome: texto(120).refine((v) => v.length >= 2, "Informe o nome completo."),
+  parentesco: texto(40),
+  telefone: telefoneSchema,
+  telefone2: telefoneSchema.nullish().transform((v) => v ?? null),
+});
+
+/** 6. Saúde / anamnese — ficha §3. Campo vazio = "Não". */
+export const saudeSchema = z.strictObject({
+  tipo_sanguineo: z
+    .enum(TIPOS_SANGUINEOS)
+    .nullish()
+    .transform((v) => v ?? null),
+  condicoes_medicas: textoLivre,
+  lesoes_cronicas: textoLivre,
+  medicacao_continua: textoLivre,
+  artes_marciais_anteriores: textoLivre,
+});
+
+/** 7. Termo de responsabilidade e autorizações — ficha §5. */
 export const termosSchema = z.strictObject({
-  aceito: z.literal(true, "É necessário aceitar os termos."),
+  aceito: z.literal(true, "É necessário aceitar o termo de responsabilidade."),
   versao: z.string().trim().min(1).max(20),
+  /** Uso de imagem/voz na divulgação do CT (resposta explícita, sim ou não). */
+  autoriza_uso_imagem: z.boolean("Responda se autoriza o uso de imagem."),
+  /** Inclusão nos grupos de WhatsApp da turma ("Autorizo" / "Não autorizo"). */
+  autoriza_grupo_whatsapp: z.boolean("Responda se autoriza a inclusão no grupo de WhatsApp."),
 });
 
 export const cadastroAlunoSchema = z
   .strictObject({
-    aluno: dadosAlunoSchema,
-    saude: saudeSchema,
+    acesso: acessoSchema,
+    treino: treinoSchema,
+    pessoal: pessoalSchema,
     responsavel: responsavelSchema.optional(),
+    contato_emergencia: contatoEmergenciaSchema,
+    saude: saudeSchema,
     termos: termosSchema,
   })
   .superRefine((b, ctx) => {
-    if (menorDeIdade(b.aluno.data_nascimento) && !b.responsavel)
+    if (menorDeIdade(b.pessoal.data_nascimento) && !b.responsavel)
       ctx.addIssue({
         code: "custom",
         path: ["responsavel"],
         message: `Aluno menor de ${MAIORIDADE} anos: os dados do responsável são obrigatórios.`,
+      });
+    if (b.treino.data_matricula < b.pessoal.data_nascimento)
+      ctx.addIssue({
+        code: "custom",
+        path: ["treino", "data_matricula"],
+        message: "Data de matrícula anterior à data de nascimento.",
       });
   });
 

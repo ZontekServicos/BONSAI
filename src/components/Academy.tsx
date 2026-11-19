@@ -6,7 +6,10 @@ import type {
   InventoryProduct,
   GraduacaoHistorico,
   Attendance,
+  AlunoProfile,
+  Modalidade,
 } from "../types/contract";
+import { MODALIDADE_COM_FAIXA } from "../types/contract";
 import { api, errorMessage } from "../lib/api";
 import {
   Card,
@@ -23,7 +26,142 @@ import {
   time,
   day,
   today,
+  niveis,
+  graduacaoTexto,
+  type Field,
 } from "./ui";
+
+/** Jiu-Jitsu: faixa + grau. Boxe, Muay Thai e MMA: nível técnico. */
+function camposGraduacao(modalidade: Modalidade, atual?: AlunoProfile): Field[] {
+  const mesma = atual?.modalidade === modalidade;
+  return modalidade === MODALIDADE_COM_FAIXA
+    ? [
+        { name: "faixa", label: "Faixa", value: mesma ? atual.faixa : "Faixa branca" },
+        {
+          name: "grau",
+          label: "Grau",
+          type: "number",
+          value: mesma ? atual.graduacao_nivel : 0,
+          min: 0,
+          max: 20,
+        },
+      ]
+    : [
+        {
+          name: "nivel",
+          label: "Nível",
+          options: niveis,
+          value: (mesma && atual.nivel) || "iniciante",
+        },
+      ];
+}
+const graduacaoBody = (modalidade: Modalidade, b: Record<string, string>) =>
+  modalidade === MODALIDADE_COM_FAIXA
+    ? { faixa: b.faixa, grau: Number(b.grau) }
+    : { nivel: b.nivel };
+
+/** Seletor controlado: a modalidade decide quais campos de graduação aparecem. */
+function ModalidadeSelect({
+  value,
+  onChange,
+}: {
+  value: Modalidade;
+  onChange: (m: Modalidade) => void;
+}) {
+  return (
+    <div className="data-form">
+      <div className="modal-fields">
+        <label>
+          Modalidade
+          <select value={value} onChange={(e) => onChange(e.target.value as Modalidade)}>
+            {modalities.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function NewStudent({ onDone }: { onDone: () => void }) {
+  const [modalidade, setModalidade] = useState<Modalidade>(MODALIDADE_COM_FAIXA);
+  return (
+    <Card title="Novo aluno">
+      <ModalidadeSelect value={modalidade} onChange={setModalidade} />
+      <Form
+        fields={[
+          { name: "nome", label: "Nome completo" },
+          { name: "email", label: "E-mail", type: "email" },
+          { name: "senha_inicial", label: "Senha inicial", type: "password" },
+          ...camposGraduacao(modalidade),
+          { name: "data_matricula", label: "Data de matrícula", type: "date", value: today() },
+          { name: "emergencia_nome", label: "Contato de emergência" },
+          { name: "emergencia_parentesco", label: "Parentesco" },
+          { name: "emergencia_telefone", label: "Telefone 1 (com DDD)", type: "tel" },
+          {
+            name: "emergencia_telefone2",
+            label: "Telefone 2 (opcional)",
+            type: "tel",
+            required: false,
+          },
+        ]}
+        submit="Cadastrar aluno"
+        onSubmit={async (b) => {
+          await api("/alunos", {
+            method: "POST",
+            body: {
+              nome: b.nome,
+              email: b.email,
+              senha_inicial: b.senha_inicial,
+              modalidade,
+              ...graduacaoBody(modalidade, b),
+              data_matricula: b.data_matricula,
+              contato_emergencia: {
+                nome: b.emergencia_nome,
+                parentesco: b.emergencia_parentesco,
+                telefone: b.emergencia_telefone,
+                telefone2: b.emergencia_telefone2 || null,
+              },
+            },
+          });
+          onDone();
+        }}
+      />
+    </Card>
+  );
+}
+
+function EditStudent({ a, onSaved }: { a: Aluno; onSaved: () => void }) {
+  const [modalidade, setModalidade] = useState<Modalidade>(a.perfil.modalidade);
+  const trocou = modalidade !== a.perfil.modalidade;
+  return (
+    <>
+      <ModalidadeSelect value={modalidade} onChange={setModalidade} />
+      <Form
+        fields={[
+          { name: "nome", label: "Nome", value: a.nome },
+          { name: "email", label: "E-mail", type: "email", value: a.email },
+          // Trocar a modalidade exige a graduação correspondente.
+          ...(trocou ? camposGraduacao(modalidade) : []),
+        ]}
+        onSubmit={async (b) => {
+          await api(`/alunos/${a.id}`, {
+            method: "PATCH",
+            body: {
+              nome: b.nome,
+              email: b.email,
+              ...(trocou ? { modalidade, ...graduacaoBody(modalidade, b) } : {}),
+            },
+          });
+          onSaved();
+        }}
+      />
+    </>
+  );
+}
 
 type DashboardData = {
   alunos_ativos: number;
@@ -173,9 +311,7 @@ export function Students({ canManage = true }: { canManage?: boolean }) {
                 <small className="cell-note">{a.email}</small>
               </td>
               <td>{labels[a.perfil.modalidade]}</td>
-              <td>
-                {a.perfil.faixa} · {a.perfil.graduacao_nivel}º grau
-              </td>
+              <td>{graduacaoTexto(a.perfil)}</td>
               <td>
                 <Status value={a.status} />
               </td>
@@ -190,28 +326,12 @@ export function Students({ canManage = true }: { canManage?: boolean }) {
         <Pager page={page} total={r.data?.total ?? 0} onPage={setPage} />
       </Card>
       {canManage && adding && (
-        <Card title="Novo aluno">
-          <Form
-            fields={[
-              { name: "nome", label: "Nome completo" },
-              { name: "email", label: "E-mail", type: "email" },
-              { name: "senha_inicial", label: "Senha inicial", type: "password" },
-              { name: "modalidade", label: "Modalidade", options: modalities },
-              { name: "faixa", label: "Faixa / graduação", value: "Faixa branca" },
-              { name: "graduacao_nivel", label: "Grau", type: "number", value: 0, min: 0, max: 20 },
-              { name: "data_matricula", label: "Data de matrícula", type: "date", value: today() },
-            ]}
-            submit="Cadastrar aluno"
-            onSubmit={async (b) => {
-              await api("/alunos", {
-                method: "POST",
-                body: { ...b, graduacao_nivel: Number(b.graduacao_nivel) },
-              });
-              setAdding(false);
-              r.reload();
-            }}
-          />
-        </Card>
+        <NewStudent
+          onDone={() => {
+            setAdding(false);
+            r.reload();
+          }}
+        />
       )}
     </>
   );
@@ -241,25 +361,7 @@ function StudentDetail({
             <p>
               {a.perfil.total_presencas} presenças · Matrícula {a.perfil.numero_matricula}
             </p>
-            {canManage && (
-              <Form
-                key={JSON.stringify(a)}
-                fields={[
-                  { name: "nome", label: "Nome", value: a.nome },
-                  { name: "email", label: "E-mail", type: "email", value: a.email },
-                  {
-                    name: "modalidade",
-                    label: "Modalidade",
-                    options: modalities,
-                    value: a.perfil.modalidade,
-                  },
-                ]}
-                onSubmit={async (b) => {
-                  await api(`/alunos/${id}`, { method: "PATCH", body: b });
-                  r.reload();
-                }}
-              />
-            )}
+            {canManage && <EditStudent key={JSON.stringify(a)} a={a} onSaved={r.reload} />}
           </Card>
           {canManage && (
             <Card title="Status da matrícula">
@@ -287,16 +389,28 @@ function StudentDetail({
           )}
           <Card title="Registrar graduação">
             <Form
+              key={a.perfil.modalidade}
               fields={[
-                { name: "faixa_nova", label: "Nova faixa", value: a.perfil.faixa },
-                {
-                  name: "graduacao_nova",
-                  label: "Novo grau",
-                  type: "number",
-                  min: 0,
-                  max: 20,
-                  value: a.perfil.graduacao_nivel,
-                },
+                ...(a.perfil.modalidade === MODALIDADE_COM_FAIXA
+                  ? [
+                      { name: "faixa_nova", label: "Nova faixa", value: a.perfil.faixa },
+                      {
+                        name: "graduacao_nova",
+                        label: "Novo grau",
+                        type: "number",
+                        min: 0,
+                        max: 20,
+                        value: a.perfil.graduacao_nivel,
+                      },
+                    ]
+                  : [
+                      {
+                        name: "nivel_novo",
+                        label: "Novo nível",
+                        options: niveis,
+                        value: a.perfil.nivel ?? "iniciante",
+                      },
+                    ]),
                 { name: "data_graduacao", label: "Data", type: "date", value: today() },
                 { name: "observacao", label: "Observação", required: false },
               ]}
@@ -305,7 +419,9 @@ function StudentDetail({
                   method: "POST",
                   body: {
                     ...b,
-                    graduacao_nova: Number(b.graduacao_nova),
+                    ...(b.graduacao_nova !== undefined
+                      ? { graduacao_nova: Number(b.graduacao_nova) }
+                      : {}),
                     observacao: b.observacao || undefined,
                   },
                 });
@@ -314,12 +430,12 @@ function StudentDetail({
               }}
             />
             <Loading {...h} />
-            <Table headers={["Data", "Faixa", "Grau"]} empty={h.data?.length === 0}>
+            <Table headers={["Data", "Faixa / nível", "Grau"]} empty={h.data?.length === 0}>
               {h.data?.map((g) => (
                 <tr key={g.id}>
                   <td>{day(g.data_graduacao)}</td>
                   <td>{g.faixa_nova}</td>
-                  <td>{g.graduacao_nova}</td>
+                  <td>{g.modalidade === MODALIDADE_COM_FAIXA ? g.graduacao_nova : "—"}</td>
                 </tr>
               ))}
             </Table>

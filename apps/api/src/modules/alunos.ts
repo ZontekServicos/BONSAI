@@ -18,6 +18,40 @@ import {
   type Context,
 } from "../http.js";
 import { hashPassword } from "../auth.js";
+import {
+  colunasGraduacao,
+  contatoEmergenciaSchema,
+  dataMatriculaSchema,
+  graduacaoCampos,
+  graduacaoSchema,
+  modalidadeSchema,
+  nivelSchema,
+  validarNivelPorModalidade,
+} from "../../../../src/lib/cadastro.js";
+import { MODALIDADE_COM_FAIXA, type NivelTecnico } from "../../../../src/types/contract.js";
+
+/** Promoção conforme a modalidade atual do aluno (mesma regra do cadastro). */
+function validarPromocao(
+  modalidade: string,
+  b: { faixa_nova?: string; graduacao_nova?: number; nivel_novo?: NivelTecnico },
+) {
+  if (modalidade === MODALIDADE_COM_FAIXA) {
+    if (b.faixa_nova === undefined || b.graduacao_nova === undefined || b.nivel_novo)
+      fail(400, "VALIDATION_ERROR", "Jiu-Jitsu: informe faixa_nova e graduacao_nova (sem nível).");
+    return colunasGraduacao({
+      modalidade: MODALIDADE_COM_FAIXA,
+      faixa: b.faixa_nova,
+      grau: b.graduacao_nova,
+    });
+  }
+  if (!b.nivel_novo || b.faixa_nova !== undefined || b.graduacao_nova !== undefined)
+    fail(
+      400,
+      "VALIDATION_ERROR",
+      "Esta modalidade usa nivel_novo: Iniciante, Intermediário ou Avançado.",
+    );
+  return colunasGraduacao({ modalidade: "boxe", nivel: b.nivel_novo });
+}
 import { generateMonths, situation } from "./billing.js";
 
 export async function aluno(db: DB, id: string) {
@@ -59,25 +93,31 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
     "/alunos",
     {
       role: "admin",
-      body: z.strictObject({
-        nome: text().min(2),
-        email: z.email().max(254),
-        senha_inicial: z.string().min(8).max(128),
-        modalidade: modality,
-        faixa: text(40),
-        graduacao_nivel: z.number().int().min(0).max(20).default(0),
-        data_matricula: date.optional(),
-        gerar_mensalidades: z
-          .strictObject({
-            valor: positiveMoney,
-            dia_vencimento: z.number().int().min(1).max(31),
-            meses: z.number().int().min(1).max(24),
-          })
-          .optional(),
-      }),
+      // Cadastro simples (admin). Mesmas regras da ficha para nível por
+      // modalidade e contato de emergência obrigatório.
+      body: z
+        .strictObject({
+          nome: text().min(2),
+          email: z.email().max(254),
+          senha_inicial: z.string().min(8).max(128),
+          modalidade: modalidadeSchema,
+          ...graduacaoCampos,
+          data_matricula: dataMatriculaSchema.optional(),
+          contato_emergencia: contatoEmergenciaSchema,
+          gerar_mensalidades: z
+            .strictObject({
+              valor: positiveMoney,
+              dia_vencimento: z.number().int().min(1).max(31),
+              meses: z.number().int().min(1).max(24),
+            })
+            .optional(),
+        })
+        .superRefine((b, ctx) => validarNivelPorModalidade(b, ctx)),
     },
     async (_r, reply, b) => {
       const password = await hashPassword(b.senha_inicial);
+      const g = colunasGraduacao(b);
+      const e = b.contato_emergencia;
       const result = await db.transaction(async (tx) => {
         const user = await one(
           tx,
@@ -85,9 +125,22 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
           [b.nome, b.email, password],
         );
         await tx.query(
-          `INSERT INTO aluno_profile(user_id,modalidade,faixa,graduacao_nivel,data_matricula)
-        VALUES($1,$2,$3,$4,coalesce($5::date,fn_hoje_sp()))`,
-          [user.id, b.modalidade, b.faixa, b.graduacao_nivel, b.data_matricula ?? null],
+          `INSERT INTO aluno_profile(user_id,modalidade,faixa,graduacao_nivel,nivel,data_matricula,
+             contato_emergencia_nome,contato_emergencia_parentesco,contato_emergencia_telefone,
+             contato_emergencia_telefone2)
+        VALUES($1,$2,$3,$4,$5,coalesce($6::date,fn_hoje_sp()),$7,$8,$9,$10)`,
+          [
+            user.id,
+            b.modalidade,
+            g.faixa,
+            g.graduacao_nivel,
+            g.nivel,
+            b.data_matricula ?? null,
+            e.nome,
+            e.parentesco,
+            e.telefone,
+            e.telefone2,
+          ],
         );
         if (b.gerar_mensalidades) await generateMonths(tx, user.id, b.gerar_mensalidades);
         return aluno(tx, user.id);
@@ -116,7 +169,9 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
         .strictObject({
           nome: text().min(2).optional(),
           email: z.email().max(254).optional(),
-          modalidade: modality.optional(),
+          modalidade: modalidadeSchema.optional(),
+          // Só junto com a troca de modalidade (promoção é em /graduacoes).
+          ...graduacaoCampos,
         })
         .refine((b) => Object.keys(b).length > 0),
     },
@@ -125,14 +180,38 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
         found(
           await one(tx, "SELECT id FROM users WHERE id=$1 AND role='aluno' FOR UPDATE", [p.id]),
         );
+        const atual = found(
+          await one(tx, "SELECT modalidade FROM aluno_profile WHERE user_id=$1 FOR UPDATE", [p.id]),
+        );
+        const trocou = b.modalidade !== undefined && b.modalidade !== atual.modalidade;
+        const { nome, email, modalidade, ...grad } = b;
+        if (!trocou && Object.values(grad).some((v) => v !== undefined))
+          fail(
+            400,
+            "VALIDATION_ERROR",
+            "Faixa, grau e nível só mudam junto com a modalidade; promoções vão em /graduacoes.",
+          );
         await tx.query(
           "UPDATE users SET nome=coalesce($2,nome),email=coalesce($3,email) WHERE id=$1",
-          [p.id, b.nome ?? null, b.email ?? null],
+          [p.id, nome ?? null, email ?? null],
         );
-        await tx.query(
-          "UPDATE aluno_profile SET modalidade=coalesce($2,modalidade) WHERE user_id=$1",
-          [p.id, b.modalidade ?? null],
-        );
+        if (trocou) {
+          // Nova modalidade ⇒ nova graduação, com a mesma regra do cadastro.
+          const parsed = graduacaoSchema.safeParse({ modalidade, ...grad });
+          if (!parsed.success)
+            fail(
+              400,
+              "VALIDATION_ERROR",
+              "Graduação incompatível com a nova modalidade.",
+              parsed.error.issues.map((i) => ({ path: i.path, message: i.message })),
+            );
+          const g = colunasGraduacao(parsed.data);
+          await tx.query(
+            `UPDATE aluno_profile SET modalidade=$2,faixa=$3,graduacao_nivel=$4,nivel=$5
+              WHERE user_id=$1`,
+            [p.id, parsed.data.modalidade, g.faixa, g.graduacao_nivel, g.nivel],
+          );
+        }
         return aluno(tx, p.id);
       }),
   );
@@ -178,9 +257,11 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
     {
       role: STAFF,
       params,
+      // Jiu-Jitsu: faixa_nova + graduacao_nova. Demais modalidades: nivel_novo.
       body: z.strictObject({
-        faixa_nova: text(40),
-        graduacao_nova: z.number().int().min(0).max(20),
+        faixa_nova: text(40).optional(),
+        graduacao_nova: z.number().int().min(0).max(20).optional(),
+        nivel_novo: nivelSchema.optional(),
         data_graduacao: date.optional(),
         observacao: text(2000).optional(),
       }),
@@ -193,6 +274,7 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
         const old = found(
           await one(tx, "SELECT * FROM aluno_profile WHERE user_id=$1 FOR UPDATE", [p.id]),
         );
+        const g = validarPromocao(old.modalidade, b);
         const row = await one(
           tx,
           `INSERT INTO graduacao_historico(user_id,modalidade,faixa_anterior,graduacao_anterior,faixa_nova,graduacao_nova,data_graduacao,promovido_por,observacao)
@@ -202,18 +284,17 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
             old.modalidade,
             old.faixa,
             old.graduacao_nivel,
-            b.faixa_nova,
-            b.graduacao_nova,
+            g.faixa,
+            g.graduacao_nivel,
             b.data_graduacao ?? null,
             r.account.id,
             b.observacao ?? null,
           ],
         );
-        await tx.query("UPDATE aluno_profile SET faixa=$2,graduacao_nivel=$3 WHERE user_id=$1", [
-          p.id,
-          b.faixa_nova,
-          b.graduacao_nova,
-        ]);
+        await tx.query(
+          "UPDATE aluno_profile SET faixa=$2,graduacao_nivel=$3,nivel=$4 WHERE user_id=$1",
+          [p.id, g.faixa, g.graduacao_nivel, g.nivel],
+        );
         return row;
       });
       return reply.code(201).send(result);
