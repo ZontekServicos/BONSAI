@@ -19,6 +19,7 @@ try {
     "database/migrations/0006_ajustes_ficha_professor.sql",
     "database/migrations/0007_convites.sql",
     "database/migrations/0008_perfil_aluno.sql",
+    "database/migrations/0009_loja_catalogo.sql",
   ])
     await client.query(await readFile(path, "utf8"));
   await client.query(`INSERT INTO users(nome,email,password_hash,role)

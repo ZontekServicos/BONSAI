@@ -117,6 +117,43 @@ export interface InventoryProduct {
   categoria: string;
   /** [EXT] soft-delete */
   ativo: boolean;
+  /** Texto do catálogo do aluno (0009). */
+  descricao: string | null;
+  /** Foto do produto (link servido pela API; null = sem foto). */
+  imagem_url: string | null;
+}
+
+/** GET /loja/produtos — catálogo do aluno (inventory_product com ativo = true). */
+export interface ProdutoLoja {
+  id: UUID;
+  nome: string;
+  descricao: string | null;
+  preco: Decimal;
+  imagem_url: string | null;
+  estoque: number;
+  categoria: string;
+}
+
+export type PedidoLojaStatus = "solicitado" | "atendido" | "cancelado";
+
+/** `pedidos_loja` — intenção de compra (não baixa estoque nem lança no caixa). */
+export interface PedidoLoja {
+  id: UUID;
+  user_id: UUID;
+  product_id: UUID;
+  quantidade: number;
+  preco_unitario: Decimal;
+  status: PedidoLojaStatus;
+  atendido_por: UUID | null;
+  atendido_em: ISOTimestamp | null;
+  created_at: ISOTimestamp;
+}
+
+/** POST /loja/pedido */
+export interface PedidoLojaCriado {
+  pedido: PedidoLoja;
+  /** Conversa com o WhatsApp da loja com a mensagem pronta. */
+  whatsapp_url: string;
 }
 
 export interface LojaVenda {
@@ -348,7 +385,10 @@ export type ApiErrorCode =
   | "CONVITE_INVALIDO"
   | "CONVITE_EXPIRADO"
   | "CONVITE_UTILIZADO"
-  | "CONVITE_REVOGADO";
+  | "CONVITE_REVOGADO"
+  | "LOJA_SEM_WHATSAPP"
+  | "PRODUTO_ESGOTADO"
+  | "PEDIDO_FINALIZADO";
 
 export type ConviteStatus = "pendente" | "expirado" | "utilizado" | "revogado";
 

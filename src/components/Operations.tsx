@@ -1,13 +1,16 @@
 import { useRef, useState } from "react";
+import { ImageOff } from "lucide-react";
 import type {
   Financeiro,
   InventoryProduct,
   LojaVenda,
+  PedidoLoja,
   CashFlow,
   BalancoDiario,
   Paginated,
 } from "../types/contract";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
+import { prepararImagem } from "../lib/preparar-imagem";
 import { StudentPicker } from "./Academy";
 import {
   Card,
@@ -26,6 +29,139 @@ import {
   labels,
   type Field,
 } from "./ui";
+
+/** Foto do produto no catálogo do aluno (mesmo preparo da foto de perfil). */
+function ImagemProduto({ product, onChange }: { product: InventoryProduct; onChange: () => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function enviar(file?: File) {
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { blob } = await prepararImagem(file);
+      await api(`/produtos/${product.product_id}/imagem`, { method: "PUT", raw: blob });
+      onChange();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+      if (input.current) input.current.value = "";
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-4 py-2">
+      {product.imagem_url ? (
+        <img
+          src={product.imagem_url}
+          alt={product.nome}
+          className="size-24 rounded-xl border border-border object-cover"
+        />
+      ) : (
+        <span className="grid size-24 place-items-center rounded-xl border border-border bg-surface-raised text-text-muted">
+          <ImageOff size={26} aria-hidden="true" />
+        </span>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={() => input.current?.click()}
+        >
+          {busy ? "Enviando…" : product.imagem_url ? "Trocar foto" : "Adicionar foto"}
+        </button>
+        {product.imagem_url && (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={async () => {
+              await api(`/produtos/${product.product_id}/imagem`, { method: "DELETE" });
+              onChange();
+            }}
+          >
+            Remover foto
+          </button>
+        )}
+      </div>
+      <input
+        ref={input}
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        tabIndex={-1}
+        onChange={(e) => void enviar(e.target.files?.[0])}
+      />
+      {error && <p className="error notice w-full">{error}</p>}
+    </div>
+  );
+}
+
+const PEDIDO_STATUS: Record<PedidoLoja["status"], string> = {
+  solicitado: "Solicitado",
+  atendido: "Atendido",
+  cancelado: "Cancelado",
+};
+/** Intenções de compra vindas do catálogo do aluno (WhatsApp). */
+function PedidosAlunos({ revision, onChange }: { revision: number; onChange: () => void }) {
+  const [page, setPage] = useState(1);
+  const [error, setError] = useState("");
+  const r = useResource<
+    Paginated<PedidoLoja & { aluno_nome: string; produto_nome: string; produto_estoque: number }>
+  >(`/loja/pedidos?page=${page}`, revision);
+  async function concluir(id: string, status: "atendido" | "cancelado") {
+    setError("");
+    try {
+      await api(`/loja/pedidos/${id}`, { method: "PATCH", body: { status } });
+      onChange();
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  }
+  return (
+    <Card title="Pedidos dos alunos">
+      <p>
+        Pedidos feitos pelo catálogo do aluno (a conversa segue no WhatsApp da loja). O pedido não
+        baixa estoque: ao entregar, registre a venda em "Registrar venda" e marque como atendido.
+      </p>
+      {error && <p className="error notice">{error}</p>}
+      <Loading {...r} />
+      <Table
+        headers={["Data", "Aluno", "Produto", "Qtd.", "Valor", "Status", "Ação"]}
+        empty={r.data?.data.length === 0}
+      >
+        {r.data?.data.map((o) => (
+          <tr key={o.id}>
+            <td>{time(o.created_at)}</td>
+            <td>{o.aluno_nome}</td>
+            <td>
+              {o.produto_nome}
+              <small className="cell-note">Estoque atual: {o.produto_estoque}</small>
+            </td>
+            <td>{o.quantidade}</td>
+            <td>{brl(o.preco_unitario)}</td>
+            <td>{PEDIDO_STATUS[o.status]}</td>
+            <td>
+              {o.status === "solicitado" && (
+                <div className="flex flex-wrap gap-2">
+                  <button className="primary" onClick={() => void concluir(o.id, "atendido")}>
+                    Atendido
+                  </button>
+                  <button className="secondary" onClick={() => void concluir(o.id, "cancelado")}>
+                    Cancelar
+                  </button>
+                </div>
+              )}
+            </td>
+          </tr>
+        ))}
+      </Table>
+      <Pager page={page} total={r.data?.total ?? 0} onPage={setPage} />
+    </Card>
+  );
+}
 
 const moneyField: Field = {
   name: "valor",
@@ -252,6 +388,13 @@ export function Store() {
       value: product?.preco,
     },
     { name: "categoria", label: "Categoria", value: product?.categoria },
+    {
+      name: "descricao",
+      label: "Descrição no catálogo do aluno (opcional)",
+      type: "textarea",
+      value: product?.descricao ?? "",
+      required: false,
+    },
   ];
   return (
     <>
@@ -263,7 +406,22 @@ export function Store() {
         >
           {r.data?.map((p) => (
             <tr key={p.product_id}>
-              <td>{p.nome}</td>
+              <td>
+                <span className="flex items-center gap-3">
+                  {p.imagem_url ? (
+                    <img
+                      src={p.imagem_url}
+                      alt=""
+                      className="size-10 shrink-0 rounded-lg border border-border object-cover"
+                    />
+                  ) : (
+                    <span className="grid size-10 shrink-0 place-items-center rounded-lg border border-border bg-surface-raised text-text-muted">
+                      <ImageOff size={16} aria-hidden="true" />
+                    </span>
+                  )}
+                  {p.nome}
+                </span>
+              </td>
               <td>{brl(p.preco)}</td>
               <td>{p.estoque_atual}</td>
               <td>{p.ativo ? "Ativo" : "Inativo"}</td>
@@ -322,8 +480,14 @@ export function Store() {
                     preco: amount(b.preco),
                     categoria: b.categoria,
                     ativo: b.ativo === "true",
+                    descricao: b.descricao?.trim() || null,
                   }
-                : { ...b, preco: amount(b.preco), estoque_atual: Number(b.estoque_atual) },
+                : {
+                    ...b,
+                    preco: amount(b.preco),
+                    estoque_atual: Number(b.estoque_atual),
+                    descricao: b.descricao?.trim() || null,
+                  },
             });
             setRevision((v) => v + 1);
             setProduct(undefined);
@@ -331,6 +495,11 @@ export function Store() {
         />
         {product && (
           <>
+            <h3>Foto no catálogo</h3>
+            <ImagemProduto
+              product={r.data?.find((p) => p.product_id === product.product_id) ?? product}
+              onChange={() => setRevision((v) => v + 1)}
+            />
             <h3>Movimentar estoque</h3>
             <Form
               key={`stock-${product.product_id}`}
@@ -363,6 +532,7 @@ export function Store() {
           </>
         )}
       </Card>
+      <PedidosAlunos revision={revision} onChange={() => setRevision((v) => v + 1)} />
       <Card title="Registrar venda">
         <StudentPicker value={student} onChange={setStudent} />
         <Form

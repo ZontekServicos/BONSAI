@@ -14,23 +14,11 @@ import type { FastifyInstance } from "fastify";
 import { one } from "../db.js";
 import { route, uuid, fail, found, type Context } from "../http.js";
 import { aluno } from "./alunos.js";
-import {
-  FOTO_MAX_BYTES,
-  FOTO_MIMES,
-  formatoDaImagem,
-  perfilEditavelSchema,
-} from "../../../../src/lib/perfil.js";
+import { perfilEditavelSchema } from "../../../../src/lib/perfil.js";
+import { normalizarImagem } from "../image.js";
 
 export function perfilRoutes(app: FastifyInstance, ctx: Context) {
   const { db } = ctx;
-
-  // Corpo binário só para os formatos de foto; o limite global (64 KB) continua
-  // valendo para todo o resto.
-  app.addContentTypeParser(
-    [...FOTO_MIMES],
-    { parseAs: "buffer", bodyLimit: FOTO_MAX_BYTES },
-    (_r, body, done) => done(null, body),
-  );
 
   // Mesmo handler em dois caminhos: /me/perfil (padrão do projeto, ao lado do
   // GET /me/perfil) e /profile (nome da especificação).
@@ -89,17 +77,15 @@ export function perfilRoutes(app: FastifyInstance, ctx: Context) {
       body: z.instanceof(Buffer, { error: "Envie a imagem como image/webp ou image/jpeg." }),
     },
     async (r, _s, dados) => {
-      const mime = formatoDaImagem(dados);
-      if (!mime || mime !== r.headers["content-type"]?.split(";")[0].trim())
-        fail(400, "VALIDATION_ERROR", "Arquivo não é uma imagem WebP ou JPEG válida.");
-      if (dados.length < 100) fail(400, "VALIDATION_ERROR", "Imagem vazia ou corrompida.");
+      const imagem = await normalizarImagem(dados, r.headers["content-type"]);
+      if (!imagem) fail(400, "VALIDATION_ERROR", "Arquivo não é uma imagem WebP ou JPEG válida.");
       return db.transaction(async (tx) => {
         // Troca atômica: apaga a anterior e grava a nova (1 foto por aluno).
         await tx.query("DELETE FROM fotos WHERE user_id = $1", [r.account.id]);
         const { id } = await one(
           tx,
           "INSERT INTO fotos(user_id, mime, dados) VALUES($1, $2, $3) RETURNING id",
-          [r.account.id, mime, dados],
+          [r.account.id, imagem.mime, imagem.dados],
         );
         const foto_url = `/api/v1/fotos/${id}`;
         await tx.query("UPDATE aluno_profile SET foto_url = $2 WHERE user_id = $1", [
@@ -114,9 +100,7 @@ export function perfilRoutes(app: FastifyInstance, ctx: Context) {
   route(app, ctx, "DELETE", "/me/foto", { role: "aluno" }, async (r, reply) => {
     await db.transaction(async (tx) => {
       await tx.query("DELETE FROM fotos WHERE user_id = $1", [r.account.id]);
-      await tx.query("UPDATE aluno_profile SET foto_url = NULL WHERE user_id = $1", [
-        r.account.id,
-      ]);
+      await tx.query("UPDATE aluno_profile SET foto_url = NULL WHERE user_id = $1", [r.account.id]);
     });
     return reply.code(204).send();
   });

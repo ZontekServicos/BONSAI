@@ -167,6 +167,8 @@ export type Field = {
   step?: string;
   required?: boolean;
   hint?: string;
+  /** Ocupa a linha inteira do formulário. */
+  full?: boolean;
 };
 export function Form({
   fields,
@@ -201,9 +203,17 @@ export function Form({
       <fieldset disabled={busy}>
         <div className="modal-fields">
           {fields.map((f) => (
-            <label key={f.name}>
+            <label key={f.name} className={f.full || f.type === "textarea" ? "full" : undefined}>
               {f.label}
-              {f.options ? (
+              {f.type === "textarea" ? (
+                <textarea
+                  name={f.name}
+                  defaultValue={f.value}
+                  required={f.required !== false}
+                  rows={4}
+                  maxLength={2000}
+                />
+              ) : f.options ? (
                 <select name={f.name} defaultValue={f.value} required={f.required !== false}>
                   {f.options.map((o) => (
                     <option key={o.value} value={o.value}>

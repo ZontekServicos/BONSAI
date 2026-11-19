@@ -18,6 +18,7 @@ import {
   GraduationCap,
   CircleAlert,
   ShieldCheck,
+  Store as StoreIcon,
 } from "lucide-react";
 import { DEMO_ACCOUNTS, type DemoProfile } from "./lib/demo-accounts";
 
@@ -31,6 +32,7 @@ import { Card, Form, Notice } from "./components/ui";
 import { Dashboard, Students, Presence } from "./components/Academy";
 import { Finance, Store, Cash } from "./components/Operations";
 import { Member } from "./components/Member";
+import { Loja } from "./components/Loja";
 
 // Ficha por convite: página pública, carregada só quando aberta (traz o Zod).
 const CadastroPorConvite = lazy(() =>
@@ -299,9 +301,18 @@ function Login({ onLogin, notice = "" }: { onLogin: (u: User) => void; notice?: 
     </main>
   );
 }
-type View = "dashboard" | "students" | "presence" | "finance" | "store" | "cash" | "password";
+type View =
+  | "dashboard"
+  | "loja"
+  | "students"
+  | "presence"
+  | "finance"
+  | "store"
+  | "cash"
+  | "password";
 const items = [
   { id: "dashboard", label: "Visão geral", icon: LayoutDashboard },
+  { id: "loja", label: "Loja", icon: StoreIcon },
   { id: "students", label: "Alunos", icon: Users },
   { id: "presence", label: "Presença", icon: ClipboardCheck },
   { id: "finance", label: "Mensalidades", icon: Wallet },
@@ -313,7 +324,7 @@ const items = [
 const VIEWS: Record<UserRole, View[]> = {
   admin: ["dashboard", "students", "presence", "finance", "store", "cash", "password"],
   professor: ["students", "presence", "password"],
-  aluno: ["dashboard", "password"],
+  aluno: ["dashboard", "loja", "password"],
 };
 const ROLE_LABEL: Record<UserRole, string> = {
   admin: "Administrador",
@@ -470,7 +481,11 @@ function Painel() {
             <Logo variant="icon" className="min-[951px]:hidden" />
             <div>
               <h1>{title}</h1>
-              <p>{SUBTITLE[user.role]}</p>
+              <p>
+                {current === "loja"
+                  ? "Equipamentos e produtos da academia. Pedido direto pelo WhatsApp."
+                  : SUBTITLE[user.role]}
+              </p>
             </div>
           </div>
         </header>
@@ -490,6 +505,8 @@ function Painel() {
               }}
             />
           </Card>
+        ) : current === "loja" ? (
+          <Loja />
         ) : user.role === "aluno" ? (
           <Member />
         ) : (

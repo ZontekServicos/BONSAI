@@ -17,6 +17,8 @@ import { reportRoutes } from "./modules/reports.js";
 import { cadastroRoutes } from "./modules/cadastro.js";
 import { convitesRoutes } from "./modules/convites.js";
 import { perfilRoutes } from "./modules/perfil.js";
+import { lojaRoutes } from "./modules/loja.js";
+import { FOTO_MAX_BYTES, FOTO_MIMES } from "../../../src/lib/imagem.js";
 import { presenceStream } from "./stream.js";
 
 export async function buildApp(
@@ -45,7 +47,7 @@ export async function buildApp(
   await app.register(cors, {
     origin: config.CORS_ORIGIN,
     credentials: true,
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
   });
   await app.register(helmet, {
@@ -128,6 +130,13 @@ export async function buildApp(
   };
   app.get("/health", health);
   app.get("/api/v1/health", health);
+  // Corpo binário só para fotos (perfil e produtos); o limite global de 64 KB
+  // continua valendo para todo o resto.
+  app.addContentTypeParser(
+    [...FOTO_MIMES],
+    { parseAs: "buffer", bodyLimit: FOTO_MAX_BYTES },
+    (_r, body, done) => done(null, body),
+  );
   const ctx: Context = { db, config, authenticate: makeAuth(db, config) };
   await authRoutes(app, ctx);
   alunosRoutes(app, ctx);
@@ -138,6 +147,7 @@ export async function buildApp(
   cadastroRoutes(app, ctx);
   convitesRoutes(app, ctx);
   perfilRoutes(app, ctx);
+  lojaRoutes(app, ctx);
   if (options.stream !== false) presenceStream(app, ctx);
   if (config.SERVE_WEB) {
     await app.register(staticFiles, { root: resolve("dist"), prefix: "/", index: "index.html" });

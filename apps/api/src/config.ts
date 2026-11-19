@@ -24,6 +24,12 @@ const envSchema = z
       .regex(/^\d{1,8}\.\d{2}$/)
       .default("150.00"),
     BILLING_DUE_DAY: z.coerce.number().int().min(1).max(31).default(10),
+    /** WhatsApp da loja da academia: só dígitos, com DDI (ex.: 5511999990000). */
+    WHATSAPP_LOJA: z
+      .string()
+      .transform((v) => v.replace(/\D/g, ""))
+      .pipe(z.string().regex(/^[1-9]\d{9,14}$/, "WHATSAPP_LOJA: use DDI + DDD + número"))
+      .optional(),
   })
   .refine((v) => v.JWT_ACCESS_SECRET !== v.JWT_QR_SECRET, "JWT secrets must differ")
   .refine(

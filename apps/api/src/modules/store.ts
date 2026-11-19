@@ -64,6 +64,7 @@ export function storeRoutes(app: FastifyInstance, ctx: Context) {
         preco: money,
         estoque_atual: z.number().int().min(0).max(10000000),
         categoria: text(60),
+        descricao: text(2000).nullish(),
       }),
     },
     async (_r, reply, b) =>
@@ -72,8 +73,8 @@ export function storeRoutes(app: FastifyInstance, ctx: Context) {
         .send(
           await one(
             db,
-            "INSERT INTO inventory_product(nome,preco,estoque_atual,categoria) VALUES($1,$2,$3,$4) RETURNING *",
-            [b.nome, b.preco, b.estoque_atual, b.categoria],
+            "INSERT INTO inventory_product(nome,preco,estoque_atual,categoria,descricao) VALUES($1,$2,$3,$4,$5) RETURNING *",
+            [b.nome, b.preco, b.estoque_atual, b.categoria, b.descricao ?? null],
           ),
         ),
   );
@@ -91,6 +92,8 @@ export function storeRoutes(app: FastifyInstance, ctx: Context) {
           preco: money.optional(),
           categoria: text(60).optional(),
           ativo: z.boolean().optional(),
+          /** null apaga a descrição */
+          descricao: text(2000).nullish(),
         })
         .refine((v) => Object.keys(v).length > 0),
     },
@@ -98,8 +101,17 @@ export function storeRoutes(app: FastifyInstance, ctx: Context) {
       found(
         await one(
           db,
-          `UPDATE inventory_product SET nome=coalesce($2,nome),preco=coalesce($3,preco),categoria=coalesce($4,categoria),ativo=coalesce($5,ativo) WHERE product_id=$1 RETURNING *`,
-          [p.id, b.nome ?? null, b.preco ?? null, b.categoria ?? null, b.ativo ?? null],
+          `UPDATE inventory_product SET nome=coalesce($2,nome),preco=coalesce($3,preco),categoria=coalesce($4,categoria),ativo=coalesce($5,ativo),
+             descricao=CASE WHEN $6::bool THEN $7 ELSE descricao END WHERE product_id=$1 RETURNING *`,
+          [
+            p.id,
+            b.nome ?? null,
+            b.preco ?? null,
+            b.categoria ?? null,
+            b.ativo ?? null,
+            b.descricao !== undefined,
+            b.descricao ?? null,
+          ],
         ),
       ),
   );

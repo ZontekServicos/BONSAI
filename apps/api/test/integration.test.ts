@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
+import sharp from "sharp";
 import { decodeJwt, SignJWT } from "jose";
 import type { HTTPMethods } from "fastify";
 import { buildApp } from "../src/app.js";
@@ -27,6 +28,8 @@ let other: string;
 let adminToken: string;
 let studentToken: string;
 let passwordHash: string;
+let imagemWebp: Buffer;
+let imagemJpeg: Buffer;
 const password = "Correct-test-password-2026";
 const origin = "http://localhost:8443";
 async function request(
@@ -73,6 +76,16 @@ async function product(stock = 1, price = "12.10") {
   );
 }
 beforeAll(async () => {
+  const pixels = Buffer.alloc(64 * 64 * 3);
+  for (let i = 0; i < pixels.length; i++) pixels[i] = (i * 37) % 256;
+  [imagemWebp, imagemJpeg] = await Promise.all([
+    sharp(pixels, { raw: { width: 64, height: 64, channels: 3 } })
+      .webp({ quality: 90 })
+      .toBuffer(),
+    sharp(pixels, { raw: { width: 64, height: 64, channels: 3 } })
+      .jpeg({ quality: 90 })
+      .toBuffer(),
+  ]);
   const adminDB = new pg.Client({ connectionString: testURL });
   await adminDB.connect();
   await adminDB.query("CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public");
@@ -84,6 +97,7 @@ beforeAll(async () => {
     JWT_ACCESS_SECRET: "a".repeat(40),
     JWT_QR_SECRET: "q".repeat(40),
     CORS_ORIGIN: origin,
+    WHATSAPP_LOJA: "+55 (11) 99999-0000",
     NODE_ENV: "test",
   });
   db = createDatabase(config);
@@ -95,6 +109,7 @@ beforeAll(async () => {
   await db.query(await readFile("database/migrations/0006_ajustes_ficha_professor.sql", "utf8"));
   await db.query(await readFile("database/migrations/0007_convites.sql", "utf8"));
   await db.query(await readFile("database/migrations/0008_perfil_aluno.sql", "utf8"));
+  await db.query(await readFile("database/migrations/0009_loja_catalogo.sql", "utf8"));
   app = await buildApp(config, db, { logger: false, stream: false });
   await app.ready();
   passwordHash = await hashPassword(password);
@@ -442,9 +457,8 @@ describe("card, attendance and billing", () => {
       (await one(db, "SELECT count(*)::int AS n FROM financeiro WHERE user_id=$1", [id])).n,
     ).toBe(3);
     expect(
-      (
-        await request("POST", `/alunos/${id}/graduacoes`, { nivel_novo: "Intermediário" })
-      ).statusCode,
+      (await request("POST", `/alunos/${id}/graduacoes`, { nivel_novo: "Intermediário" }))
+        .statusCode,
     ).toBe(201);
     expect((await request("GET", `/alunos/${id}`)).json().perfil).toMatchObject({
       nivel: "intermediario",
@@ -845,7 +859,9 @@ describe("student registration (phase 1) and professor role", () => {
     const sibling = await register(cadastro(minor, { responsavel: { id: f.responsavel.id } }));
     expect(sibling.statusCode).toBe(201);
     expect(sibling.json().ficha.responsavel.id).toBe(f.responsavel.id);
-    const search = (await request("GET", "/responsaveis?q=maria", undefined, professorToken)).json();
+    const search = (
+      await request("GET", "/responsaveis?q=maria", undefined, professorToken)
+    ).json();
     expect(search.data).toEqual([expect.objectContaining({ id: f.responsavel.id, alunos: 2 })]);
     // busca por nome sem dígitos não pode casar com todos pelo telefone
     expect(
@@ -982,9 +998,7 @@ describe("student registration (phase 1) and professor role", () => {
       { cep: "123" },
       { whatsapp: "123" },
     ])
-      expect((await register(cadastro({ pessoal }))).statusCode, JSON.stringify(pessoal)).toBe(
-        400,
-      );
+      expect((await register(cadastro({ pessoal }))).statusCode, JSON.stringify(pessoal)).toBe(400);
     // formato antigo (tudo dentro de "aluno") não é mais aceito
     expect((await register({ aluno: cadastro().pessoal })).statusCode).toBe(400);
     // última linha de defesa: mesmo por SQL direto
@@ -1016,7 +1030,9 @@ describe("student registration (phase 1) and professor role", () => {
   it("uses belt + degree for Jiu-Jitsu and Iniciante/Intermediário/Avançado for other modalities", async () => {
     // Boxe: nível aceito com ou sem acento; faixa espelha o rótulo; grau = 0
     const boxe = await register(
-      cadastro({ treino: { modalidade: "boxe", faixa: undefined, grau: undefined, nivel: "Intermediário" } }),
+      cadastro({
+        treino: { modalidade: "boxe", faixa: undefined, grau: undefined, nivel: "Intermediário" },
+      }),
     );
     expect(boxe.statusCode).toBe(201);
     expect(boxe.json().perfil).toMatchObject({
@@ -1086,9 +1102,10 @@ describe("student registration (phase 1) and professor role", () => {
       "INSERT INTO users(nome,email,password_hash,role) VALUES('Sem Contato','sem@example.test','x','aluno') RETURNING id",
     );
     await expect(
-      db.query("INSERT INTO aluno_profile(user_id,modalidade,faixa) VALUES($1,'jiu_jitsu','Branca')", [
-        u.id,
-      ]),
+      db.query(
+        "INSERT INTO aluno_profile(user_id,modalidade,faixa) VALUES($1,'jiu_jitsu','Branca')",
+        [u.id],
+      ),
     ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_emergencia_obrigatoria" });
     await expect(
       db.query(
@@ -1164,9 +1181,7 @@ describe("student registration (phase 1) and professor role", () => {
         "",
       )
     ).json().access_token;
-    expect((await request("GET", "/auth/me", undefined, token)).json().user.role).toBe(
-      "professor",
-    );
+    expect((await request("GET", "/auth/me", undefined, token)).json().user.role).toBe("professor");
     expect((await request("GET", "/professores")).json()).toHaveLength(2);
     const off = await request("PATCH", `/professores/${created.json().id}/status`, {
       status: "inativo",
@@ -1184,8 +1199,10 @@ describe("migrations", () => {
     const { createHash } = await import("node:crypto");
     const published: Record<string, string> = {
       "schema.sql": "292e0a9db5615cc5729d25109382a0226fdb213dd91d32f15168a30b8eca11f7",
-      "migrations/0002_runtime.sql": "e87aa24d6ee1923c6576b55f9bc465af84f9b64dc74627ece42033a3c242458e",
-      "migrations/0003_search.sql": "715febe997596745076107a10766f08ce908523fb588ce04a72313a31ed123c1",
+      "migrations/0002_runtime.sql":
+        "e87aa24d6ee1923c6576b55f9bc465af84f9b64dc74627ece42033a3c242458e",
+      "migrations/0003_search.sql":
+        "715febe997596745076107a10766f08ce908523fb588ce04a72313a31ed123c1",
       "migrations/0004_papeis_modalidades.sql":
         "0638c6b4726347402fcd2f0137a3ef70a046d235712a4f356a9b956c45655c66",
       // 0005 publicada no commit 54e215e
@@ -1197,6 +1214,9 @@ describe("migrations", () => {
       // 0007 publicada em 8e24743
       "migrations/0007_convites.sql":
         "588dbb3d50dfd4a51f8da5f74ba66e92601446b39bfd01bed7c99d1d632a06f7",
+      // 0008 publicada em ef093ad
+      "migrations/0008_perfil_aluno.sql":
+        "1162c62a2a9bdc1583e9336afacfd45c0909a3717d0ab3d38246a23a1e59b9f1",
     };
     for (const [name, sum] of Object.entries(published)) {
       const raw = (await readFile(`database/${name}`, "utf8")).replace(/\r\n/g, "\n");
@@ -1302,8 +1322,7 @@ describe("registration invites", () => {
     };
   };
   const validar = (t: string) => request("GET", `/convites/validar/${t}`, undefined, "");
-  const enviar = (t: string, body: unknown) =>
-    request("POST", `/convites/${t}/cadastro`, body, "");
+  const enviar = (t: string, body: unknown) => request("POST", `/convites/${t}/cadastro`, body, "");
 
   it("lets staff create a single-use link and stores only the token hash", async () => {
     const res = await convidar("novo.aluno@example.test", { whatsapp: "(11) 98888-7777" });
@@ -1317,7 +1336,8 @@ describe("registration invites", () => {
     expect(JSON.stringify(row)).not.toContain(token);
     expect(row.token_hash).toMatch(/^[0-9a-f]{64}$/);
     // validade padrão de 7 dias
-    const dias = (new Date(row.data_expiracao).getTime() - new Date(row.created_at).getTime()) / 864e5;
+    const dias =
+      (new Date(row.data_expiracao).getTime() - new Date(row.created_at).getTime()) / 864e5;
     expect(dias).toBeCloseTo(7, 5);
     // admin também convida; aluno e anônimo não
     expect((await convidar("outro@example.test", {}, adminToken)).statusCode).toBe(201);
@@ -1337,7 +1357,10 @@ describe("registration invites", () => {
     const primeiro = tokenDe((await convidar("ana.convite@example.test")).json().url);
     const ok = await validar(primeiro);
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toMatchObject({ email: "ana.convite@example.test", convidado_por: "Pessoa Teste" });
+    expect(ok.json()).toMatchObject({
+      email: "ana.convite@example.test",
+      convidado_por: "Pessoa Teste",
+    });
     for (const t of ["x".repeat(43), "curto", "a/b"]) {
       const r = await validar(encodeURIComponent(t));
       expect(r.statusCode, t).toBe(404);
@@ -1348,7 +1371,10 @@ describe("registration invites", () => {
     expect((await validar(primeiro)).json().error.code).toBe("CONVITE_REVOGADO");
     expect((await validar(segundo)).statusCode).toBe(200);
     // revogação manual
-    const { id } = await one(db, "SELECT id FROM convites WHERE NOT utilizado AND revogado_em IS NULL");
+    const { id } = await one(
+      db,
+      "SELECT id FROM convites WHERE NOT utilizado AND revogado_em IS NULL",
+    );
     const rev = await request("DELETE", `/convites/${id}`, undefined, professorToken);
     expect(rev.json().status).toBe("revogado");
     expect((await validar(segundo)).statusCode).toBe(410);
@@ -1382,9 +1408,12 @@ describe("registration invites", () => {
     // vínculo a responsável existente não é aceito no fluxo público
     const comId = await enviar(
       token,
-      ficha({ ...menor, treino: { data_matricula: todaySP() } }, {
-        responsavel: { id: randomUUID() },
-      }),
+      ficha(
+        { ...menor, treino: { data_matricula: todaySP() } },
+        {
+          responsavel: { id: randomUUID() },
+        },
+      ),
     );
     expect(comId.statusCode).toBe(400);
     // e-mail no corpo não é aceito: a conta usa o e-mail do convite
@@ -1392,9 +1421,12 @@ describe("registration invites", () => {
     (comEmail.acesso as Record<string, unknown>).email = "intruso@example.test";
     expect((await enviar(token, comEmail)).statusCode).toBe(400);
 
-    const body = ficha({ ...menor, treino: { data_matricula: todaySP() } }, {
-      responsavel: guardian,
-    });
+    const body = ficha(
+      { ...menor, treino: { data_matricula: todaySP() } },
+      {
+        responsavel: guardian,
+      },
+    );
     const [a, b] = await Promise.all([enviar(token, body), enviar(token, body)]);
     const codes = [a.statusCode, b.statusCode].sort();
     expect(codes[0]).toBe(201); // um envio cria a conta…
@@ -1426,13 +1458,17 @@ describe("registration invites", () => {
     await expect(
       db.query("UPDATE convites SET utilizado=false, utilizado_em=NULL WHERE id=$1", [c.id]),
     ).rejects.toMatchObject({ code: "23514" });
-    expect((await request("DELETE", `/convites/${c.id}`, undefined, professorToken)).statusCode).toBe(409);
+    expect(
+      (await request("DELETE", `/convites/${c.id}`, undefined, professorToken)).statusCode,
+    ).toBe(409);
   });
 
   it("keeps the invite usable when the registration fails (rollback)", async () => {
     const token = tokenDe((await convidar("cpf.repetido@example.test")).json().url);
     const ocupado = cadastro();
-    expect((await request("POST", "/alunos/cadastro", ocupado, professorToken)).statusCode).toBe(201);
+    expect((await request("POST", "/alunos/cadastro", ocupado, professorToken)).statusCode).toBe(
+      201,
+    );
     const users = await count("users");
     const dup = await enviar(token, ficha({ pessoal: { cpf: ocupado.pessoal.cpf } }));
     expect(dup.statusCode).toBe(409);
@@ -1448,14 +1484,15 @@ describe("registration invites", () => {
 // ---------------------------------------------------------------------------
 describe("student self-service profile", () => {
   /** Bytes com a assinatura certa (o servidor confere a assinatura, não decodifica). */
-  const webp = (n = 400) => {
+  const webpFalso = (n: number) => {
     const b = Buffer.alloc(n, 7);
     b.write("RIFF", 0, "ascii");
     b.writeUInt32LE(n - 8, 4);
     b.write("WEBP", 8, "ascii");
     return b;
   };
-  const jpeg = (n = 400) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(n - 4, 3)]);
+  const webp = () => Buffer.from(imagemWebp);
+  const jpeg = () => Buffer.from(imagemJpeg);
   const patch = (body: unknown, token = studentToken) =>
     request("PATCH", "/me/perfil", body, token);
   const upload = (b: Buffer, type: string, token = studentToken) =>
@@ -1515,16 +1552,16 @@ describe("student self-service profile", () => {
     expect(first.statusCode).toBe(200);
     const url1: string = first.json().foto_url;
     expect(url1).toMatch(/^\/api\/v1\/fotos\/[0-9a-f-]{36}$/);
-    expect((await request("GET", "/me/perfil", undefined, studentToken)).json().perfil.foto_url).toBe(
-      url1,
-    );
+    expect(
+      (await request("GET", "/me/perfil", undefined, studentToken)).json().perfil.foto_url,
+    ).toBe(url1);
     // servida sem login (para <img>), com tipo correto e cache imutável
     const img = await app.inject({ method: "GET", url: url1 });
     expect(img.statusCode).toBe(200);
     expect(img.headers["content-type"]).toBe("image/webp");
     expect(img.headers["cache-control"]).toContain("immutable");
     expect(img.headers["x-content-type-options"]).toBe("nosniff");
-    expect(img.rawPayload.equals(webp())).toBe(true);
+    expect((await sharp(img.rawPayload).metadata()).format).toBe("webp");
     // troca: novo link, o antigo deixa de existir, 1 foto por aluno
     const second = await upload(jpeg(), "image/jpeg");
     expect(second.statusCode).toBe(200);
@@ -1535,9 +1572,9 @@ describe("student self-service profile", () => {
     ).toBe(1);
     // remoção
     expect((await request("DELETE", "/me/foto", undefined, studentToken)).statusCode).toBe(204);
-    expect((await request("GET", "/me/perfil", undefined, studentToken)).json().perfil.foto_url).toBe(
-      null,
-    );
+    expect(
+      (await request("GET", "/me/perfil", undefined, studentToken)).json().perfil.foto_url,
+    ).toBe(null);
     expect((await app.inject({ method: "GET", url: second.json().foto_url })).statusCode).toBe(404);
   });
 
@@ -1545,41 +1582,54 @@ describe("student self-service profile", () => {
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(400)]);
     expect((await upload(png, "image/webp")).statusCode).toBe(400); // assinatura errada
     expect((await upload(jpeg(), "image/webp")).statusCode).toBe(400); // tipo ≠ conteúdo
-    expect((await upload(webp(50), "image/webp")).statusCode).toBe(400); // pequeno demais
+    expect((await upload(webpFalso(400), "image/webp")).statusCode).toBe(400);
+    expect((await upload(webpFalso(50), "image/webp")).statusCode).toBe(400); // pequeno demais
     expect((await upload(png, "image/png")).statusCode).toBe(415); // formato não aceito
-    expect((await upload(webp(600 * 1024), "image/webp")).statusCode).toBe(413); // > 512 KB
+    expect((await upload(webpFalso(600 * 1024), "image/webp")).statusCode).toBe(413); // > 512 KB
     expect((await upload(webp(), "image/webp", adminToken)).statusCode).toBe(403);
     expect((await upload(webp(), "image/webp", "")).statusCode).toBe(401);
     // o limite de 64 KB do JSON continua valendo nas outras rotas
     const big = await request("PATCH", "/me/perfil", { altura: "1.80", x: "a".repeat(70_000) });
     expect(big.statusCode).toBe(413);
     expect(await one(db, "SELECT count(*)::int AS n FROM fotos")).toEqual({ n: 0 });
-    expect((await app.inject({ method: "GET", url: `/api/v1/fotos/${randomUUID()}` })).statusCode).toBe(404);
+    expect(
+      (await app.inject({ method: "GET", url: `/api/v1/fotos/${randomUUID()}` })).statusCode,
+    ).toBe(404);
   });
 });
 
 describe("PATCH /profile (spec alias) and foto_url ownership", () => {
-  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(396, 3)]);
+  const jpeg = () => Buffer.from(imagemJpeg);
   const profile = (body: unknown, token = studentToken) =>
     request("PATCH", "/profile", body, token);
 
   it("keeps existing profiles valid with the new fields empty", async () => {
     const p = (await request("GET", "/me/perfil", undefined, studentToken)).json().perfil;
-    expect(p).toMatchObject({ foto_url: null, altura: null, peso: null, medidas_atualizadas_em: null });
+    expect(p).toMatchObject({
+      foto_url: null,
+      altura: null,
+      peso: null,
+      medidas_atualizadas_em: null,
+    });
   });
 
   it("updates only foto_url, altura and peso, with numeric validation", async () => {
     const ok = await profile({ altura: 1.7, peso: "64,3" });
     expect(ok.statusCode).toBe(200);
     expect(ok.json().perfil).toMatchObject({ altura: 1.7, peso: 64.3 });
-    for (const body of [{ peso: "sessenta" }, { altura: true }, { nome: "X" }, { modalidade: "boxe" }])
+    for (const body of [
+      { peso: "sessenta" },
+      { altura: true },
+      { nome: "X" },
+      { modalidade: "boxe" },
+    ])
       expect((await profile(body)).statusCode, JSON.stringify(body)).toBe(400);
     expect((await profile({ peso: 70 }, adminToken)).statusCode).toBe(403);
   });
 
   it("accepts foto_url only as null or the student's own uploaded photo", async () => {
     const own = (
-      await request("PUT", "/me/foto", jpeg, studentToken, { "content-type": "image/jpeg" })
+      await request("PUT", "/me/foto", jpeg(), studentToken, { "content-type": "image/jpeg" })
     ).json().foto_url as string;
     // link externo ou foto de outra pessoa: recusado
     for (const foto_url of ["https://tracker.example/p.gif", `/api/v1/fotos/${randomUUID()}`])
@@ -1593,5 +1643,279 @@ describe("PATCH /profile (spec alias) and foto_url ownership", () => {
     const removed = await profile({ foto_url: null });
     expect(removed.json().perfil.foto_url).toBeNull();
     expect((await app.inject({ method: "GET", url: own })).statusCode).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loja (0009): catálogo do aluno + pedido de intenção via WhatsApp
+// ---------------------------------------------------------------------------
+describe("store catalog and purchase intent", () => {
+  const novoProduto = async (nome: string, extra: Record<string, unknown> = {}) =>
+    (
+      await request("POST", "/produtos", {
+        nome,
+        preco: "289.90",
+        estoque_atual: 5,
+        categoria: "Kimonos",
+        ...extra,
+      })
+    ).json();
+  const pedir = (produto_id: string, extra: Record<string, unknown> = {}, token = studentToken) =>
+    request("POST", "/loja/pedido", { produto_id, ...extra }, token);
+  const whats = (nome: string) =>
+    `https://wa.me/5511999990000?text=${encodeURIComponent(`Olá, gostaria de adquirir o item ${nome}`)}`;
+
+  it("lists only active products with the catalog fields, in-stock first", async () => {
+    const kimono = await novoProduto("Kimono A1", { descricao: "Trançado leve.\nCor branca." });
+    const esgotado = await novoProduto("Faixa Preta", { estoque_atual: 0, preco: "59.90" });
+    const inativo = await novoProduto("Rashguard Antigo");
+    await request("DELETE", `/produtos/${inativo.product_id}`);
+    const lista = await request("GET", "/loja/produtos", undefined, studentToken);
+    expect(lista.statusCode).toBe(200);
+    // a tabela de produtos não é zerada entre testes: olha só os criados aqui
+    const meus = (lista.json() as { id: string }[]).filter((x) =>
+      [kimono.product_id, esgotado.product_id, inativo.product_id].includes(x.id),
+    );
+    expect(meus).toEqual([
+      {
+        id: kimono.product_id,
+        nome: "Kimono A1",
+        descricao: "Trançado leve.\nCor branca.",
+        preco: "289.90",
+        imagem_url: null,
+        estoque: 5,
+        categoria: "Kimonos",
+      },
+      expect.objectContaining({ id: esgotado.product_id, estoque: 0 }),
+    ]);
+    expect((await request("GET", "/loja/produtos", undefined, "")).statusCode).toBe(401);
+  });
+
+  it("registers the intent without touching stock or cash and returns the WhatsApp link", async () => {
+    const p = await novoProduto("Kimono A2");
+    const caixa = await count("cash_flow");
+    const res = await pedir(p.product_id);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().whatsapp_url).toBe(whats("Kimono A2"));
+    expect(res.json().pedido).toMatchObject({
+      user_id: student,
+      product_id: p.product_id,
+      quantidade: 1,
+      preco_unitario: "289.90",
+      status: "solicitado",
+    });
+    expect(
+      (
+        await one(db, "SELECT estoque_atual FROM inventory_product WHERE product_id=$1", [
+          p.product_id,
+        ])
+      ).estoque_atual,
+    ).toBe(5);
+    expect(await count("cash_flow")).toBe(caixa);
+    // clicar de novo reaproveita o pedido em aberto
+    const de_novo = await pedir(p.product_id, { quantidade: 2 });
+    expect(de_novo.statusCode).toBe(200);
+    expect(de_novo.json().pedido.id).toBe(res.json().pedido.id);
+    expect(decodeURIComponent(de_novo.json().whatsapp_url)).toContain("Kimono A2 (2 unidades)");
+    expect(await count("pedidos_loja")).toBe(1);
+  });
+
+  it("limits purchase intent to ten requests per student per minute", async () => {
+    const p = await novoProduto("Kimono rate limit");
+    for (let i = 0; i < 10; i++) expect((await pedir(p.product_id)).statusCode).toBeLessThan(300);
+    const blocked = await pedir(p.product_id);
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.json().error.code).toBe("RATE_LIMITED");
+  });
+
+  it("allows cross-origin PUT preflight for product image upload", async () => {
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: `/api/v1/produtos/${randomUUID()}/imagem`,
+      headers: {
+        origin,
+        "access-control-request-method": "PUT",
+        "access-control-request-headers": "content-type,authorization",
+      },
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-methods"]).toContain("PUT");
+  });
+
+  it("refuses sold-out, inactive, invalid and non-student requests", async () => {
+    const zerado = await novoProduto("Luva 16oz", { estoque_atual: 0 });
+    const r1 = await pedir(zerado.product_id);
+    expect(r1.statusCode).toBe(409);
+    expect(r1.json().error.code).toBe("PRODUTO_ESGOTADO");
+    const poucos = await novoProduto("Protetor bucal", { estoque_atual: 1 });
+    expect((await pedir(poucos.product_id, { quantidade: 2 })).statusCode).toBe(409);
+    const inativo = await novoProduto("Bermuda");
+    await request("DELETE", `/produtos/${inativo.product_id}`);
+    expect((await pedir(inativo.product_id)).statusCode).toBe(404);
+    expect((await pedir("nao-e-uuid")).statusCode).toBe(400);
+    expect((await pedir(poucos.product_id, { quantidade: 11 })).statusCode).toBe(400);
+    expect((await pedir(poucos.product_id, {}, adminToken)).statusCode).toBe(403);
+    // banco: só aluno pode ter pedido
+    await expect(
+      db.query("INSERT INTO pedidos_loja(user_id, product_id, preco_unitario) VALUES($1, $2, 1)", [
+        admin,
+        poucos.product_id,
+      ]),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("answers 503 when the store WhatsApp is not configured, without registering anything", async () => {
+    const semWhats = await buildApp({ ...config, WHATSAPP_LOJA: undefined }, db, {
+      logger: false,
+      stream: false,
+    });
+    try {
+      const p = await novoProduto("Kimono A3");
+      const r = await semWhats.inject({
+        method: "POST",
+        url: "/api/v1/loja/pedido",
+        headers: { origin, authorization: `Bearer ${studentToken}` },
+        payload: { produto_id: p.product_id },
+      });
+      expect(r.statusCode).toBe(503);
+      expect(r.json().error.code).toBe("LOJA_SEM_WHATSAPP");
+      expect(await count("pedidos_loja")).toBe(0);
+    } finally {
+      await semWhats.close();
+    }
+  });
+
+  it("lets only the admin follow up on requests", async () => {
+    const p = await novoProduto("Kimono A4");
+    const { pedido } = (await pedir(p.product_id)).json();
+    const lista = (await request("GET", "/loja/pedidos")).json();
+    expect(lista.data[0]).toMatchObject({
+      id: pedido.id,
+      aluno_nome: "Pessoa Teste",
+      produto_nome: "Kimono A4",
+      status: "solicitado",
+    });
+    const ok = await request("PATCH", `/loja/pedidos/${pedido.id}`, { status: "atendido" });
+    expect(ok.json()).toMatchObject({ status: "atendido", atendido_por: admin });
+    const de_novo = await request("PATCH", `/loja/pedidos/${pedido.id}`, { status: "cancelado" });
+    expect(de_novo.statusCode).toBe(409);
+    expect(de_novo.json().error.code).toBe("PEDIDO_FINALIZADO");
+    // depois de atendido, um novo pedido do mesmo produto é outro registro
+    expect((await pedir(p.product_id)).statusCode).toBe(201);
+    expect((await request("GET", "/loja/pedidos", undefined, studentToken)).statusCode).toBe(403);
+    expect(
+      (await request("PATCH", `/loja/pedidos/${pedido.id}`, { status: "atendido" }, studentToken))
+        .statusCode,
+    ).toBe(403);
+  });
+
+  it("rejects corrupted product images, keeps the current one and strips metadata (LOJA-03)", async () => {
+    const p = await novoProduto("Kimono A6");
+    const put = (dados: Buffer, tipo: string) =>
+      request("PUT", `/produtos/${p.product_id}/imagem`, dados, adminToken, {
+        "content-type": tipo,
+      });
+    const atual = (await put(Buffer.from(imagemWebp), "image/webp")).json().imagem_url as string;
+    // assinatura RIFF/WEBP correta, conteúdo lixo (passava na checagem antiga de magic bytes)
+    const assinaturaFalsa = Buffer.alloc(400, 7);
+    assinaturaFalsa.write("RIFF", 0, "ascii");
+    assinaturaFalsa.writeUInt32LE(392, 4);
+    assinaturaFalsa.write("WEBP", 8, "ascii");
+    const invalidos: [string, Buffer, string][] = [
+      ["assinatura falsa", assinaturaFalsa, "image/webp"],
+      [
+        "WebP truncado",
+        Buffer.from(imagemWebp).subarray(0, Math.floor(imagemWebp.length / 2)),
+        "image/webp",
+      ],
+      ["JPEG declarado como WebP", Buffer.from(imagemJpeg), "image/webp"],
+      [
+        "bytes aleatórios",
+        Buffer.from(Array.from({ length: 600 }, (_, i) => (i * 131) % 256)),
+        "image/jpeg",
+      ],
+    ];
+    for (const [caso, dados, tipo] of invalidos) {
+      const r = await put(dados, tipo);
+      expect(r.statusCode, caso).toBe(400);
+      expect(r.json().error.code, caso).toBe("VALIDATION_ERROR");
+    }
+    // nada foi trocado: a foto válida anterior continua sendo a vigente
+    const row = await one(db, "SELECT imagem_url FROM inventory_product WHERE product_id=$1", [
+      p.product_id,
+    ]);
+    expect(row.imagem_url).toBe(atual);
+    expect(
+      (
+        await one(db, "SELECT count(*)::int AS n FROM produto_imagens WHERE product_id=$1", [
+          p.product_id,
+        ])
+      ).n,
+    ).toBe(1);
+    expect((await app.inject({ method: "GET", url: atual })).statusCode).toBe(200);
+    // EXIF (ex.: localização da câmera) não sobrevive à regravação no servidor
+    const comExif = await sharp(Buffer.alloc(32 * 32 * 3, 90), {
+      raw: { width: 32, height: 32, channels: 3 },
+    })
+      .withExif({ IFD0: { Copyright: "SEGREDO-GPS-AUDITORIA" } })
+      .jpeg()
+      .toBuffer();
+    expect(comExif.includes("SEGREDO-GPS-AUDITORIA")).toBe(true);
+    const nova = (await put(comExif, "image/jpeg")).json().imagem_url as string;
+    const servida = (await app.inject({ method: "GET", url: nova })).rawPayload;
+    expect(servida.includes("SEGREDO-GPS-AUDITORIA")).toBe(false);
+    expect((await sharp(servida).metadata()).exif).toBeUndefined();
+  });
+
+  it("refuses external photo URLs for the profile too, even by direct SQL (LOJA-02)", async () => {
+    await expect(
+      db.query(
+        "UPDATE aluno_profile SET foto_url='https://tracker.example/p.gif' WHERE user_id=$1",
+        [student],
+      ),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_foto_url" });
+  });
+
+  it("stores the product photo and description managed by the admin", async () => {
+    const p = await novoProduto("Kimono A5");
+    const webp = Buffer.from(imagemWebp);
+    const up = await request("PUT", `/produtos/${p.product_id}/imagem`, webp, adminToken, {
+      "content-type": "image/webp",
+    });
+    expect(up.statusCode).toBe(200);
+    const url: string = up.json().imagem_url;
+    expect(url).toMatch(/^\/api\/v1\/loja\/imagens\/[0-9a-f-]{36}$/);
+    const img = await app.inject({ method: "GET", url });
+    expect(img.statusCode).toBe(200);
+    expect(img.headers["content-type"]).toBe("image/webp");
+    expect((await sharp(img.rawPayload).metadata()).format).toBe("webp");
+    expect(
+      (await request("GET", "/loja/produtos", undefined, studentToken))
+        .json()
+        .find((x: { id: string }) => x.id === p.product_id).imagem_url,
+    ).toBe(url);
+    expect(
+      (
+        await request("PUT", `/produtos/${p.product_id}/imagem`, webp, studentToken, {
+          "content-type": "image/webp",
+        })
+      ).statusCode,
+    ).toBe(403);
+    // descrição: define e apaga
+    const d = await request("PATCH", `/produtos/${p.product_id}`, { descricao: "Novo texto" });
+    expect(d.json().descricao).toBe("Novo texto");
+    const d2 = await request("PATCH", `/produtos/${p.product_id}`, { descricao: null });
+    expect(d2.json()).toMatchObject({ descricao: null, nome: "Kimono A5" });
+    // remover foto
+    expect(
+      (await request("DELETE", `/produtos/${p.product_id}/imagem`)).json().imagem_url,
+    ).toBeNull();
+    expect((await app.inject({ method: "GET", url })).statusCode).toBe(404);
+    await expect(
+      db.query(
+        "UPDATE inventory_product SET imagem_url='https://tracker.example/pixel.gif' WHERE product_id=$1",
+        [p.product_id],
+      ),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_product_imagem_url" });
   });
 });

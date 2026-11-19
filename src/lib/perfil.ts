@@ -4,13 +4,7 @@
  */
 import { z } from "zod";
 
-/** Formatos aceitos no upload (o app converte qualquer foto para um deles). */
-export const FOTO_MIMES = ["image/webp", "image/jpeg"] as const;
-export type FotoMime = (typeof FOTO_MIMES)[number];
-/** Limite do upload. O app envia ≈40 KB (512 px), então sobra muita folga. */
-export const FOTO_MAX_BYTES = 512 * 1024;
-/** Lado do quadrado gerado no aparelho antes do envio. */
-export const FOTO_LADO_PX = 512;
+export { FOTO_LADO_PX, FOTO_MAX_BYTES, FOTO_MIMES, type FotoMime } from "./imagem";
 
 /**
  * Número decimal "limpo": só dígitos e no máximo 2 casas, com ponto ou vírgula
@@ -24,7 +18,10 @@ function medida(rotulo: string, unidade: string, min: number, max: number, exemp
     .pipe(
       z
         .string()
-        .regex(/^\d{1,3}(\.\d{1,2})?$/, `${rotulo}: use só números, em ${unidade} (ex.: ${exemplo}).`)
+        .regex(
+          /^\d{1,3}(\.\d{1,2})?$/,
+          `${rotulo}: use só números, em ${unidade} (ex.: ${exemplo}).`,
+        )
         .refine(
           (v) => Number(v) >= min && Number(v) <= max,
           `${rotulo} deve ficar entre ${String(min).replace(".", ",")} e ${max} ${unidade}.`,
@@ -51,11 +48,3 @@ export const perfilEditavelSchema = z
     "Nada para atualizar.",
   );
 export type PerfilEditavelInput = z.input<typeof perfilEditavelSchema>;
-
-/** Confere a assinatura do arquivo (não confia só no Content-Type). */
-export function formatoDaImagem(b: Uint8Array): FotoMime | null {
-  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
-  const ascii = (i: number, n: number) => String.fromCharCode(...b.slice(i, i + n));
-  if (b.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") return "image/webp";
-  return null;
-}

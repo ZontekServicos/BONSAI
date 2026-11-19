@@ -9,56 +9,9 @@ import { useEffect, useRef, useState } from "react";
 import { Camera, LoaderCircle, Trash2, X } from "lucide-react";
 import type { AlunoProfile } from "../types/contract";
 import { api, errorMessage } from "../lib/api";
-import { FOTO_LADO_PX, FOTO_MAX_BYTES, perfilEditavelSchema } from "../lib/perfil";
+import { perfilEditavelSchema } from "../lib/perfil";
+import { prepararImagem } from "../lib/preparar-imagem";
 import { Avatar } from "./Perfil";
-
-// ----------------------------------------------------------------------------
-// Foto: recorte quadrado + redução + reencode (sem EXIF) no próprio aparelho
-// ----------------------------------------------------------------------------
-const paraBlob = (c: HTMLCanvasElement, tipo: string, q: number) =>
-  new Promise<Blob | null>((ok) => c.toBlob(ok, tipo, q));
-const paraDataURL = (b: Blob) =>
-  new Promise<string>((ok, erro) => {
-    const r = new FileReader();
-    r.onload = () => ok(String(r.result));
-    r.onerror = () => erro(r.error);
-    r.readAsDataURL(b);
-  });
-
-async function prepararFoto(file: File): Promise<{ blob: Blob; preview: string }> {
-  if (!file.type.startsWith("image/")) throw new Error("Escolha um arquivo de imagem.");
-  let bmp: ImageBitmap;
-  try {
-    // imageOrientation padrão = "from-image": respeita a rotação da câmera.
-    bmp = await createImageBitmap(file);
-  } catch {
-    throw new Error("Não foi possível abrir esta imagem. Tente outra foto (JPEG ou PNG).");
-  }
-  const lado = Math.min(bmp.width, bmp.height);
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = FOTO_LADO_PX;
-  const g = canvas.getContext("2d");
-  if (!g) throw new Error("Seu navegador não conseguiu processar a imagem.");
-  g.imageSmoothingQuality = "high";
-  g.drawImage(
-    bmp,
-    (bmp.width - lado) / 2,
-    (bmp.height - lado) / 2,
-    lado,
-    lado,
-    0,
-    0,
-    FOTO_LADO_PX,
-    FOTO_LADO_PX,
-  );
-  bmp.close();
-  // WebP onde houver suporte; senão JPEG (Safari antigo devolve PNG para webp).
-  let blob = await paraBlob(canvas, "image/webp", 0.85);
-  if (!blob || blob.type !== "image/webp") blob = await paraBlob(canvas, "image/jpeg", 0.85);
-  if (blob && blob.size > FOTO_MAX_BYTES) blob = await paraBlob(canvas, "image/jpeg", 0.7);
-  if (!blob) throw new Error("Seu navegador não conseguiu processar a imagem.");
-  return { blob, preview: await paraDataURL(blob) };
-}
 
 /** Só dígitos e UM separador decimal (vírgula ou ponto) — "82 quilos" vira "82". */
 function soDecimal(v: string) {
@@ -114,7 +67,7 @@ export default function EditarPerfil({
     setProcessando(true);
     setFalha("");
     try {
-      setFoto(await prepararFoto(file));
+      setFoto(await prepararImagem(file));
     } catch (e) {
       setFalha(errorMessage(e));
     } finally {
@@ -174,9 +127,15 @@ export default function EditarPerfil({
         }}
         className="px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:p-7"
       >
-        <span aria-hidden="true" className="mx-auto mb-3 block h-1 w-10 rounded-full bg-border-strong sm:hidden" />
+        <span
+          aria-hidden="true"
+          className="mx-auto mb-3 block h-1 w-10 rounded-full bg-border-strong sm:hidden"
+        />
         <header className="flex items-center justify-between gap-4">
-          <h2 id="editar-perfil-titulo" className="font-display text-3xl font-black uppercase italic">
+          <h2
+            id="editar-perfil-titulo"
+            className="font-display text-3xl font-black uppercase italic"
+          >
             Editar perfil
           </h2>
           <button
@@ -204,7 +163,11 @@ export default function EditarPerfil({
                 aria-label={fotoAtual ? "Trocar foto" : "Adicionar foto"}
                 className="absolute -right-1 -bottom-1 grid size-11 place-items-center rounded-full border-4 border-surface bg-primary-strong text-text-main shadow-lg transition hover:brightness-110"
               >
-                {processando ? <LoaderCircle size={18} className="animate-spin" /> : <Camera size={18} />}
+                {processando ? (
+                  <LoaderCircle size={18} className="animate-spin" />
+                ) : (
+                  <Camera size={18} />
+                )}
               </button>
               {/* Sem `capture`: o celular oferece câmera OU galeria. */}
               <input
@@ -280,7 +243,10 @@ export default function EditarPerfil({
           </p>
 
           {falha && (
-            <p role="alert" className="rounded-xl border border-primary/60 bg-primary-strong/15 px-4 py-3 text-sm">
+            <p
+              role="alert"
+              className="rounded-xl border border-primary/60 bg-primary-strong/15 px-4 py-3 text-sm"
+            >
               {falha}
             </p>
           )}
@@ -302,4 +268,3 @@ export default function EditarPerfil({
     </dialog>
   );
 }
-
