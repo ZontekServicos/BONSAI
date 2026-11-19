@@ -55,5 +55,6 @@ export const userColumns = "id, nome, email, role, status, created_at";
 export const alunoSQL = `SELECT u.id,u.nome,u.email,u.role,u.status,u.created_at,
   json_build_object('user_id',p.user_id,'numero_matricula',p.numero_matricula,'modalidade',p.modalidade,
     'faixa',p.faixa,'graduacao_nivel',p.graduacao_nivel,'nivel',p.nivel,'total_presencas',p.total_presencas,
+    'foto_url',p.foto_url,'altura',p.altura,'peso',p.peso,'medidas_atualizadas_em',p.medidas_atualizadas_em,
     'data_matricula',to_char(p.data_matricula,'YYYY-MM-DD')) AS perfil
   FROM users u JOIN aluno_profile p ON p.user_id=u.id`;

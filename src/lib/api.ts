@@ -76,19 +76,27 @@ export async function logout() {
 }
 export async function api<T>(
   path: string,
-  options: { method?: string; body?: unknown; signal?: AbortSignal; key?: string } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    /** Corpo binário (ex.: foto); o Content-Type vem do próprio Blob. */
+    raw?: Blob;
+    signal?: AbortSignal;
+    key?: string;
+  } = {},
   retry = true,
 ): Promise<T> {
   const started = epoch;
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  if (options.raw) headers["Content-Type"] = options.raw.type;
+  else if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (options.key) headers["Idempotency-Key"] = options.key;
   const r = await fetch(`${apiBase}${path}`, {
     method: options.method ?? "GET",
     headers,
     credentials: "include",
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: options.raw ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
     signal: options.signal,
   });
   if (r.status === 401 && retry) {

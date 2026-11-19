@@ -94,6 +94,7 @@ beforeAll(async () => {
   await db.query(await readFile("database/migrations/0005_cadastro_aluno.sql", "utf8"));
   await db.query(await readFile("database/migrations/0006_ajustes_ficha_professor.sql", "utf8"));
   await db.query(await readFile("database/migrations/0007_convites.sql", "utf8"));
+  await db.query(await readFile("database/migrations/0008_perfil_aluno.sql", "utf8"));
   app = await buildApp(config, db, { logger: false, stream: false });
   await app.ready();
   passwordHash = await hashPassword(password);
@@ -1193,6 +1194,9 @@ describe("migrations", () => {
       // 0006 aprovada na auditoria final de 19/11/2026
       "migrations/0006_ajustes_ficha_professor.sql":
         "becde7ebd4cef4f92a70107e93bda1436b5221293fb58d56c0e73fa8df54a24c",
+      // 0007 publicada em 8e24743
+      "migrations/0007_convites.sql":
+        "588dbb3d50dfd4a51f8da5f74ba66e92601446b39bfd01bed7c99d1d632a06f7",
     };
     for (const [name, sum] of Object.entries(published)) {
       const raw = (await readFile(`database/${name}`, "utf8")).replace(/\r\n/g, "\n");
@@ -1436,5 +1440,158 @@ describe("registration invites", () => {
     expect(await count("users")).toBe(users);
     expect((await validar(token)).statusCode).toBe(200);
     expect((await enviar(token, ficha())).statusCode).toBe(201);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Perfil do aluno (0008): altura, peso e foto
+// ---------------------------------------------------------------------------
+describe("student self-service profile", () => {
+  /** Bytes com a assinatura certa (o servidor confere a assinatura, não decodifica). */
+  const webp = (n = 400) => {
+    const b = Buffer.alloc(n, 7);
+    b.write("RIFF", 0, "ascii");
+    b.writeUInt32LE(n - 8, 4);
+    b.write("WEBP", 8, "ascii");
+    return b;
+  };
+  const jpeg = (n = 400) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(n - 4, 3)]);
+  const patch = (body: unknown, token = studentToken) =>
+    request("PATCH", "/me/perfil", body, token);
+  const upload = (b: Buffer, type: string, token = studentToken) =>
+    request("PUT", "/me/foto", b, token, { "content-type": type });
+
+  it("lets the student update height and weight with strict numeric input", async () => {
+    const ok = await patch({ altura: "1,85", peso: 82.5 });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().perfil).toMatchObject({ altura: 1.85, peso: 82.5 });
+    const quando = ok.json().perfil.medidas_atualizadas_em;
+    expect(Date.now() - Date.parse(quando)).toBeLessThan(60_000);
+    for (const body of [
+      { peso: "82 quilos" },
+      { altura: "1.85m" },
+      { altura: "1,8,5" },
+      { peso: "82.555" },
+      { altura: 3 },
+      { altura: 0.3 },
+      { peso: 5 },
+      { peso: 400 },
+      {},
+      { nome: "Outro Nome" },
+      { foto_url: "https://evil.example/x.png" },
+    ]) {
+      const r = await patch(body);
+      expect(r.statusCode, JSON.stringify(body)).toBe(400);
+    }
+    // null apaga a medida
+    const limpo = await patch({ peso: null });
+    expect(limpo.json().perfil).toMatchObject({ altura: 1.85, peso: null });
+    // só o aluno edita o próprio perfil por esta rota
+    expect((await patch({ peso: 70 }, adminToken)).statusCode).toBe(403);
+    expect((await patch({ peso: 70 }, "")).statusCode).toBe(401);
+    // a equipe enxerga as medidas na ficha
+    const visto = (await request("GET", `/alunos/${student}`)).json().perfil;
+    expect(visto).toMatchObject({ altura: 1.85, peso: null });
+  });
+
+  it("stores medidas_atualizadas_em in the database and rejects out-of-range values there too", async () => {
+    await db.query("UPDATE aluno_profile SET peso = 70 WHERE user_id = $1", [student]);
+    const row = await one(db, "SELECT medidas_atualizadas_em FROM aluno_profile WHERE user_id=$1", [
+      student,
+    ]);
+    expect(row.medidas_atualizadas_em).not.toBeNull();
+    await expect(
+      db.query("UPDATE aluno_profile SET altura = 2.9 WHERE user_id = $1", [student]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_altura" });
+    await expect(
+      db.query("UPDATE aluno_profile SET foto_url = 'javascript:alert(1)' WHERE user_id = $1", [
+        student,
+      ]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "ck_aluno_foto_url" });
+  });
+
+  it("uploads, serves, replaces and removes the profile photo", async () => {
+    const first = await upload(webp(), "image/webp");
+    expect(first.statusCode).toBe(200);
+    const url1: string = first.json().foto_url;
+    expect(url1).toMatch(/^\/api\/v1\/fotos\/[0-9a-f-]{36}$/);
+    expect((await request("GET", "/me/perfil", undefined, studentToken)).json().perfil.foto_url).toBe(
+      url1,
+    );
+    // servida sem login (para <img>), com tipo correto e cache imutável
+    const img = await app.inject({ method: "GET", url: url1 });
+    expect(img.statusCode).toBe(200);
+    expect(img.headers["content-type"]).toBe("image/webp");
+    expect(img.headers["cache-control"]).toContain("immutable");
+    expect(img.headers["x-content-type-options"]).toBe("nosniff");
+    expect(img.rawPayload.equals(webp())).toBe(true);
+    // troca: novo link, o antigo deixa de existir, 1 foto por aluno
+    const second = await upload(jpeg(), "image/jpeg");
+    expect(second.statusCode).toBe(200);
+    expect(second.json().foto_url).not.toBe(url1);
+    expect((await app.inject({ method: "GET", url: url1 })).statusCode).toBe(404);
+    expect(
+      (await one(db, "SELECT count(*)::int AS n FROM fotos WHERE user_id=$1", [student])).n,
+    ).toBe(1);
+    // remoção
+    expect((await request("DELETE", "/me/foto", undefined, studentToken)).statusCode).toBe(204);
+    expect((await request("GET", "/me/perfil", undefined, studentToken)).json().perfil.foto_url).toBe(
+      null,
+    );
+    expect((await app.inject({ method: "GET", url: second.json().foto_url })).statusCode).toBe(404);
+  });
+
+  it("rejects files that are not WebP/JPEG, mismatched types, oversized uploads and non-students", async () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(400)]);
+    expect((await upload(png, "image/webp")).statusCode).toBe(400); // assinatura errada
+    expect((await upload(jpeg(), "image/webp")).statusCode).toBe(400); // tipo ≠ conteúdo
+    expect((await upload(webp(50), "image/webp")).statusCode).toBe(400); // pequeno demais
+    expect((await upload(png, "image/png")).statusCode).toBe(415); // formato não aceito
+    expect((await upload(webp(600 * 1024), "image/webp")).statusCode).toBe(413); // > 512 KB
+    expect((await upload(webp(), "image/webp", adminToken)).statusCode).toBe(403);
+    expect((await upload(webp(), "image/webp", "")).statusCode).toBe(401);
+    // o limite de 64 KB do JSON continua valendo nas outras rotas
+    const big = await request("PATCH", "/me/perfil", { altura: "1.80", x: "a".repeat(70_000) });
+    expect(big.statusCode).toBe(413);
+    expect(await one(db, "SELECT count(*)::int AS n FROM fotos")).toEqual({ n: 0 });
+    expect((await app.inject({ method: "GET", url: `/api/v1/fotos/${randomUUID()}` })).statusCode).toBe(404);
+  });
+});
+
+describe("PATCH /profile (spec alias) and foto_url ownership", () => {
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(396, 3)]);
+  const profile = (body: unknown, token = studentToken) =>
+    request("PATCH", "/profile", body, token);
+
+  it("keeps existing profiles valid with the new fields empty", async () => {
+    const p = (await request("GET", "/me/perfil", undefined, studentToken)).json().perfil;
+    expect(p).toMatchObject({ foto_url: null, altura: null, peso: null, medidas_atualizadas_em: null });
+  });
+
+  it("updates only foto_url, altura and peso, with numeric validation", async () => {
+    const ok = await profile({ altura: 1.7, peso: "64,3" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().perfil).toMatchObject({ altura: 1.7, peso: 64.3 });
+    for (const body of [{ peso: "sessenta" }, { altura: true }, { nome: "X" }, { modalidade: "boxe" }])
+      expect((await profile(body)).statusCode, JSON.stringify(body)).toBe(400);
+    expect((await profile({ peso: 70 }, adminToken)).statusCode).toBe(403);
+  });
+
+  it("accepts foto_url only as null or the student's own uploaded photo", async () => {
+    const own = (
+      await request("PUT", "/me/foto", jpeg, studentToken, { "content-type": "image/jpeg" })
+    ).json().foto_url as string;
+    // link externo ou foto de outra pessoa: recusado
+    for (const foto_url of ["https://tracker.example/p.gif", `/api/v1/fotos/${randomUUID()}`])
+      expect((await profile({ foto_url })).statusCode, foto_url).toBe(400);
+    // a própria foto atual: aceito (sem mudança)
+    expect((await profile({ foto_url: own, peso: 71 })).json().perfil).toMatchObject({
+      foto_url: own,
+      peso: 71,
+    });
+    // null remove a foto e a imagem deixa de ser servida
+    const removed = await profile({ foto_url: null });
+    expect(removed.json().perfil.foto_url).toBeNull();
+    expect((await app.inject({ method: "GET", url: own })).statusCode).toBe(404);
   });
 });

@@ -12,6 +12,7 @@ import type {
   ConviteCriado,
 } from "../types/contract";
 import { MODALIDADE_COM_FAIXA } from "../types/contract";
+import { Avatar, alturaTexto, pesoTexto } from "./Perfil";
 import { api, errorMessage } from "../lib/api";
 import {
   Card,
@@ -470,10 +471,24 @@ function StudentDetail({
       {a && (
         <>
           <Card title={a.nome}>
-            <Status value={a.status} />
-            <p>
-              {a.perfil.total_presencas} presenças · Matrícula {a.perfil.numero_matricula}
-            </p>
+            <div className="flex items-center gap-4">
+              <Avatar
+                nome={a.nome}
+                foto={a.perfil.foto_url}
+                className="size-16 shrink-0 rounded-2xl border border-border-strong bg-surface-raised text-2xl font-black text-primary-soft"
+              />
+              <div>
+                <Status value={a.status} />
+                <p>
+                  {a.perfil.total_presencas} presenças · Matrícula {a.perfil.numero_matricula}
+                </p>
+                <p className="cell-note">
+                  Altura {alturaTexto(a.perfil.altura)} · Peso {pesoTexto(a.perfil.peso)}
+                  {a.perfil.medidas_atualizadas_em &&
+                    ` · informado em ${day(a.perfil.medidas_atualizadas_em)}`}
+                </p>
+              </div>
+            </div>
             {canManage && <EditStudent key={JSON.stringify(a)} a={a} onSaved={r.reload} />}
           </Card>
           {canManage && (

@@ -1,5 +1,10 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { Camera } from "lucide-react";
+import { Avatar, BotaoEditarPerfil, alturaTexto, pesoTexto } from "./Perfil";
+
+// Modal carregado só quando o aluno abre (traz o Zod e o tratamento de imagem).
+const EditarPerfil = lazy(() => import("./EditarPerfil"));
 import type {
   Aluno,
   Carteirinha,
@@ -30,6 +35,12 @@ export function Member() {
   const [card, setCard] = useState<Carteirinha>();
   const [cardError, setCardError] = useState("");
   const [blocked, setBlocked] = useState(false);
+  const [editando, setEditando] = useState(false);
+  const [modalCarregado, setModalCarregado] = useState(false);
+  const abrirEdicao = () => {
+    setModalCarregado(true);
+    setEditando(true);
+  };
   const profile = useResource<Aluno>("/me/perfil", revision);
   const payments = useResource<Financeiro[]>("/me/mensalidades", revision);
   const ranks = useResource<GraduacaoHistorico[]>("/me/graduacoes", revision);
@@ -109,10 +120,27 @@ export function Member() {
               <span>MEMBRO OFICIAL</span>
             </div>
             <div className="member-main">
-              <div className="member-avatar">{profile.data.nome[0]}</div>
-              <div>
+              <button
+                type="button"
+                onClick={abrirEdicao}
+                aria-label="Trocar foto de perfil"
+                className="member-avatar relative shrink-0 overflow-hidden p-0"
+              >
+                <Avatar
+                  nome={profile.data.nome}
+                  foto={profile.data.perfil.foto_url}
+                  className="size-full"
+                />
+                <span className="absolute right-0 bottom-0 grid size-6 place-items-center rounded-tl-lg bg-primary-strong text-text-main">
+                  <Camera size={13} aria-hidden="true" />
+                </span>
+              </button>
+              <div className="min-w-0">
                 <span>ALUNO</span>
-                <h2>{profile.data.nome}</h2>
+                <div className="flex items-center gap-3">
+                  <h2 className="min-w-0 break-words">{profile.data.nome}</h2>
+                  <BotaoEditarPerfil onClick={abrirEdicao} />
+                </div>
                 <p>Matrícula {profile.data.perfil.numero_matricula}</p>
               </div>
               {card && (
@@ -144,6 +172,41 @@ export function Member() {
               </div>
             </div>
           </section>
+        )}
+        {profile.data && (
+          <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-2xl border border-border bg-surface-raised px-5 py-4">
+            <div>
+              <small className="block text-[10px] font-extrabold tracking-[0.14em] text-text-muted">
+                ALTURA
+              </small>
+              <strong className="text-lg">{alturaTexto(profile.data.perfil.altura)}</strong>
+            </div>
+            <div>
+              <small className="block text-[10px] font-extrabold tracking-[0.14em] text-text-muted">
+                PESO
+              </small>
+              <strong className="text-lg">{pesoTexto(profile.data.perfil.peso)}</strong>
+            </div>
+            <small className="text-xs text-text-muted">
+              {profile.data.perfil.medidas_atualizadas_em
+                ? `Atualizado em ${day(profile.data.perfil.medidas_atualizadas_em)}`
+                : "Informe sua altura e seu peso."}
+            </small>
+            <button className="secondary ml-auto" type="button" onClick={abrirEdicao}>
+              Editar perfil
+            </button>
+          </div>
+        )}
+        {profile.data && modalCarregado && (
+          <Suspense fallback={null}>
+            <EditarPerfil
+              nome={profile.data.nome}
+              perfil={profile.data.perfil}
+              aberto={editando}
+              onClose={() => setEditando(false)}
+              onSaved={() => setRevision((v) => v + 1)}
+            />
+          </Suspense>
         )}
         {card && <p className="cell-note">QR renovado automaticamente. Apresente na recepção.</p>}
         {blocked && (

@@ -86,7 +86,8 @@ Migrações em ordem, registradas em `schema_migrations` (nome + SHA-256; altera
 4. `database/migrations/0004_papeis_modalidades.sql` — `user_role += professor`, `modalidade += mma` (isolada: valor novo de enum não pode ser usado na mesma transação)
 5. `database/migrations/0005_cadastro_aluno.sql` — `responsaveis`, `historico_saude`, dados pessoais em `aluno_profile`, `fn_cpf_valido`, trigger de menoridade, `vw_contato_aluno` (**publicada em `54e215e`; imutável** — checksum `0d4d147d…`, protegido por teste)
 6. `database/migrations/0006_ajustes_ficha_professor.sql` — ficha do professor: contato de emergência **obrigatório** (BLK-02), autorizações de imagem/grupo de WhatsApp, `nivel_tecnico` por modalidade, regra da data de matrícula, marca `ficha_pendente` para perfis legados (checksum `becde7eb…`, protegido por teste)
-7. `database/migrations/0007_convites.sql` — tabela `convites` (só o SHA-256 do token; uso único; um convite aberto por e-mail; estados finais imutáveis por trigger)
+7. `database/migrations/0007_convites.sql` — tabela `convites` (só o SHA-256 do token; uso único; um convite aberto por e-mail; estados finais imutáveis por trigger) (checksum `588dbb3d…`, protegido por teste)
+8. `database/migrations/0008_perfil_aluno.sql` — `aluno_profile.foto_url`, `altura` (m, 0,50–2,50), `peso` (kg, 10–300), `medidas_atualizadas_em` (trigger); tabela `fotos` (WebP/JPEG ≤ 512 KB, 1 por usuário, fora do `aluno_profile` para listagens não carregarem imagem)
 
 | Tabela                | Papel                                         | Regras no banco                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -111,7 +112,7 @@ Funções: `fn_hoje_sp`, `fn_pendencias_bloqueantes`, `fn_sincronizar_status_alu
 
 Convenções: dinheiro em `NUMERIC`, trafega como **string** no JSON; datas `YYYY-MM-DD`; timestamps ISO com fuso; nada financeiro é apagado fisicamente.
 
-## 6. API — `/api/v1` (57 rotas)
+## 6. API — `/api/v1` (62 rotas)
 
 Papel: `public` = sem login · `qualquer` = qualquer autenticado (com `staffOrSelf`/`selfOrAdmin` quando há `:id`) · `STAFF` = `admin` + `professor` · `admin` · `aluno`.
 
@@ -126,6 +127,8 @@ Papel: `public` = sem login · `qualquer` = qualquer autenticado (com `staffOrSe
 | cadastro      | `GET /alunos/:id/ficha` (CPF, endereço, saúde, responsável, contato principal)                                                                                                                               | STAFF ou o próprio aluno       |
 | equipe        | `GET /professores` · `POST /professores` · `PATCH /professores/:id/status` (inativar revoga sessões)                                                                                                         | admin                          |
 | convites | `POST /convites` (`{email, whatsapp?, validade_dias?}` → `url` + `whatsapp_url`; o link só aparece aqui) · `GET /convites?status=` · `DELETE /convites/:id` (revoga) | STAFF |
+| perfil | `PATCH /me/perfil` = `PATCH /profile` (`{foto_url?, altura?, peso?}`; `foto_url` só `null` ou a própria foto atual; só números, ponto ou vírgula, 2 casas; `null` apaga; renova `medidas_atualizadas_em`) · `PUT /me/foto` (corpo binário `image/webp`/`image/jpeg`, assinatura conferida, ≤ 512 KB) · `DELETE /me/foto` | aluno (só o próprio) |
+| perfil | `GET /fotos/:id` (link aleatório que muda a cada upload; cache imutável; `nosniff`) | public |
 | convites | `GET /convites/validar/:token` · `POST /convites/:token/cadastro` (ficha completa; e-mail vem do convite; responsável só novo; consome o convite na mesma transação) — limite por IP 30/min e 10/min | public |
 | área do aluno | `GET /me/perfil` · `/me/graduacoes` · `/me/mensalidades` · `/me/presencas` · `/me/compras` · `/me/carteirinha`                                                                                               | aluno                          |
 | carteirinha   | `POST /carteirinha/validar`                                                                                                                                                                                  | STAFF                          |
@@ -161,7 +164,9 @@ Formato de erro único: `{ "error": { "code", "message", "details?" } }`. Códig
 | `App.tsx`                   | `Login`, roteamento por estado (`View`), sidebar/menu mobile, splash, troca de senha |
 | `components/Academy.tsx`    | `Dashboard`, `Students`, `Presence`                                                  |
 | `components/Operations.tsx` | `Finance`, `Store`, `Cash`                                                           |
-| `components/Member.tsx`     | área do aluno: carteirinha com QR, mensalidades                                      |
+| `components/Member.tsx`     | área do aluno ("Minha jornada"): carteirinha com QR e foto, altura/peso, mensalidades |
+| `components/Perfil.tsx`     | `Avatar`, formatação de altura/peso, botão de lápis (leve, sem Zod)                  |
+| `components/EditarPerfil.tsx` | modal (lazy, `<dialog>`; folha inferior no celular): foto da câmera/galeria recortada para 512 px e regravada em WebP no aparelho (sem EXIF/GPS), altura e peso validados com `lib/perfil.ts` |
 | `components/Cadastro.tsx`   | página pública `/cadastro?token=` (lazy): trava sem token, ficha em etapas Acesso → Treino → Dados → Responsável (só < 18) → Emergência → Saúde → Termo, validada com os schemas de `lib/cadastro.ts` |
 | `components/Logo.tsx`       | `Logo` responsiva, `Wordmark`, `useScrolled`                                         |
 | `components/ui.tsx`         | `Card`, `Table`, `Pager`, `Form`, `Notice`, `Status`, `Loading`, `useResource`       |
@@ -224,7 +229,7 @@ Fonte display: Barlow Condensed (títulos itálicos extra-bold); corpo: Archivo.
 ## 12. Qualidade e CI
 
 - **`.github/workflows/ci.yml`** (push e PR): Postgres 18 → `pnpm install --frozen-lockfile` → `lint:colors` → `build` → `test` → `pnpm audit --prod --audit-level=high`.
-- **Último resultado local (19/11):** typecheck ok, builds ok, **39/39 testes** (checksums 0001–0006, upgrade 0005→0006, convites: hash do token, expiração, revogação, uso único concorrente, rollback), credenciais demo ausentes do bundle; upgrade real validado (0005→0006 e 0006→0007 com `migrate.ts`); fluxo de convite percorrido no Chrome headless (mobile e desktop).
+- **Último resultado local (19/11):** typecheck ok, builds ok, **46/46 testes** (perfil: medidas estritas, foto com assinatura/tipo/tamanho, troca e remoção; checksums 0001–0007, upgrade 0005→0006, convites: hash do token, expiração, revogação, uso único concorrente, rollback), credenciais demo ausentes do bundle; upgrade real validado (0005→0006 e 0006→0007 com `migrate.ts`); fluxo de convite percorrido no Chrome headless (mobile e desktop).
 - **Cobertura dos testes:** JWT (expirado/forjado/contexto/algoritmo), RBAC/IDOR, origem e headers, rotação/replay/corrida de refresh, revogação, carência e bloqueio da carteirinha, check-in concorrente, pagamento duplo, caixa imutável, mensalidades idempotentes (inclusive 29/02), venda concorrente do último item, idempotência de venda, rollback de carrinho, SSE via LISTEN, path traversal no static, relatórios.
 - **Codex Security:** workflows removidos temporariamente (`15e9f86`). O relatório (`docs/CODEX_SECURITY_REPORT.md`) está **parcial**: Deep Scan interrompido por cota. Para reativar: configurar o Environment `codex-security` protegido **antes** de reverter `15e9f86`.
 

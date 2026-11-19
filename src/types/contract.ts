@@ -86,6 +86,14 @@ export interface AlunoProfile {
   graduacao_nivel: number;
   /** Nível técnico (fora do Jiu-Jitsu); null no Jiu-Jitsu e em fichas legadas pendentes. */
   nivel: NivelTecnico | null;
+  /** Foto de perfil (link servido pela API; null = sem foto). */
+  foto_url: string | null;
+  /** Metros (ex.: 1.85). Informado pelo próprio aluno. */
+  altura: number | null;
+  /** Quilos (ex.: 82.5). Informado pelo próprio aluno. */
+  peso: number | null;
+  /** Última vez que o aluno informou/confirmou altura ou peso. */
+  medidas_atualizadas_em: ISOTimestamp | null;
   total_presencas: number;
   data_matricula: ISODate;
 }
