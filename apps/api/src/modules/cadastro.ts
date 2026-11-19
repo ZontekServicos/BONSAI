@@ -15,7 +15,11 @@ import {
 } from "../http.js";
 import { hashPassword } from "../auth.js";
 import { aluno } from "./alunos.js";
-import { cadastroAlunoSchema, colunasGraduacao } from "../../../../src/lib/cadastro.js";
+import {
+  cadastroAlunoSchema,
+  colunasGraduacao,
+  type CadastroAluno,
+} from "../../../../src/lib/cadastro.js";
 
 /** Ficha completa do aluno. Inclui dados sensíveis: só staff ou o próprio aluno. */
 export async function ficha(db: DB, id: string) {
@@ -52,6 +56,112 @@ export async function ficha(db: DB, id: string) {
   return { ...base, ficha: row };
 }
 
+
+/** Dados já validados de um cadastro completo (equipe ou convite). */
+export type DadosCadastro = Omit<CadastroAluno, "acesso" | "responsavel"> & {
+  acesso: { nome: string; email: string };
+  responsavel?: CadastroAluno["responsavel"];
+};
+
+/**
+ * Grava responsável → aluno → saúde. Deve rodar DENTRO de uma transação:
+ * se qualquer passo falhar, o ROLLBACK desfaz tudo (inclusive o responsável).
+ * `autorSaude`: quem registrou a anamnese (null = o próprio aluno, via convite).
+ */
+export async function inserirAluno(
+  tx: DB,
+  b: DadosCadastro,
+  passwordHash: string,
+  autorSaude: string | null,
+): Promise<string> {
+  const { acesso, treino: t, pessoal: a, contato_emergencia: e, saude: s } = b;
+  const { responsavel, termos } = b;
+  // Jiu-Jitsu → faixa/grau; demais → nível (regra já validada no Zod).
+  const g = colunasGraduacao(t);
+  // 1. Responsável (novo ou existente).
+  let responsavelId: string | null = null;
+  if (responsavel && "id" in responsavel) {
+    const existing = await one(tx, "SELECT id FROM responsaveis WHERE id=$1 FOR SHARE", [
+      responsavel.id,
+    ]);
+    if (!existing) fail(422, "RESPONSAVEL_NAO_ENCONTRADO", "Responsável informado não existe.");
+    responsavelId = existing.id;
+  } else if (responsavel) {
+    responsavelId = (
+      await one(
+        tx,
+        `INSERT INTO responsaveis(nome,parentesco,whatsapp,telefone_emergencia,email)
+         VALUES($1,$2,$3,$4,$5) RETURNING id`,
+        [
+          responsavel.nome,
+          responsavel.parentesco,
+          responsavel.whatsapp,
+          responsavel.telefone_emergencia,
+          responsavel.email,
+        ],
+      )
+    ).id;
+  }
+  // 2. Conta + perfil do aluno vinculado ao responsável.
+  const user = await one(
+    tx,
+    `INSERT INTO users(nome,email,password_hash,role) VALUES($1,$2,$3,'aluno') RETURNING id`,
+    [acesso.nome, acesso.email, passwordHash],
+  );
+  await tx.query(
+    `INSERT INTO aluno_profile(
+       user_id, modalidade, faixa, graduacao_nivel, data_matricula,
+       genero, rg, cpf, data_nascimento, endereco, bairro, cidade, cep, whatsapp,
+       professor_responsavel, responsavel_id, termos_aceitos, termos_aceitos_em, termos_versao,
+       contato_emergencia_nome, contato_emergencia_parentesco, contato_emergencia_telefone,
+       contato_emergencia_telefone2, autoriza_uso_imagem, autoriza_grupo_whatsapp, nivel)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true,now(),$17,
+       $18,$19,$20,$21,$22,$23,$24)`,
+    [
+      user.id,
+      t.modalidade,
+      g.faixa,
+      g.graduacao_nivel,
+      t.data_matricula,
+      a.genero,
+      a.rg,
+      a.cpf,
+      a.data_nascimento,
+      a.endereco,
+      a.bairro,
+      a.cidade,
+      a.cep,
+      a.whatsapp,
+      t.professor_responsavel,
+      responsavelId,
+      termos.versao,
+      e.nome,
+      e.parentesco,
+      e.telefone,
+      e.telefone2,
+      termos.autoriza_uso_imagem,
+      termos.autoriza_grupo_whatsapp,
+      g.nivel,
+    ],
+  );
+  // 3. Histórico de saúde (1:1).
+  await tx.query(
+    `INSERT INTO historico_saude(user_id,tipo_sanguineo,condicoes_medicas,lesoes_cronicas,
+       medicacao_continua,artes_marciais_anteriores,atualizado_por)
+     VALUES($1,$2,$3,$4,$5,$6,$7)`,
+    [
+      user.id,
+      s.tipo_sanguineo,
+      s.condicoes_medicas,
+      s.lesoes_cronicas,
+      s.medicacao_continua,
+      s.artes_marciais_anteriores,
+      autorSaude ?? user.id,
+    ],
+  );
+  return user.id;
+}
+
 export function cadastroRoutes(app: FastifyInstance, ctx: Context) {
   const { db } = ctx;
   const params = z.strictObject({ id: uuid });
@@ -69,97 +179,11 @@ export function cadastroRoutes(app: FastifyInstance, ctx: Context) {
     "/alunos/cadastro",
     { role: STAFF, body: cadastroAlunoSchema },
     async (r, reply, b) => {
-      const { acesso, treino: t, pessoal: a, contato_emergencia: e, saude: s } = b;
-      const { responsavel, termos } = b;
-      // Jiu-Jitsu → faixa/grau; demais → nível (regra já validada no Zod).
-      const g = colunasGraduacao(t);
       // Argon2 fora da transação: não segura conexão/locks durante o hash.
-      const password = await hashPassword(acesso.senha_inicial);
+      const password = await hashPassword(b.acesso.senha_inicial);
       const result = await db.transaction(async (tx) => {
-        // 1. Responsável (novo ou existente). Se qualquer passo seguinte falhar,
-        //    o ROLLBACK desfaz também o responsável recém-criado.
-        let responsavelId: string | null = null;
-        if (responsavel && "id" in responsavel) {
-          const existing = await one(tx, "SELECT id FROM responsaveis WHERE id=$1 FOR SHARE", [
-            responsavel.id,
-          ]);
-          if (!existing)
-            fail(422, "RESPONSAVEL_NAO_ENCONTRADO", "Responsável informado não existe.");
-          responsavelId = existing.id;
-        } else if (responsavel) {
-          responsavelId = (
-            await one(
-              tx,
-              `INSERT INTO responsaveis(nome,parentesco,whatsapp,telefone_emergencia,email)
-               VALUES($1,$2,$3,$4,$5) RETURNING id`,
-              [
-                responsavel.nome,
-                responsavel.parentesco,
-                responsavel.whatsapp,
-                responsavel.telefone_emergencia,
-                responsavel.email,
-              ],
-            )
-          ).id;
-        }
-        // 2. Conta + perfil do aluno vinculado ao responsável.
-        const user = await one(
-          tx,
-          `INSERT INTO users(nome,email,password_hash,role) VALUES($1,$2,$3,'aluno') RETURNING id`,
-          [acesso.nome, acesso.email, password],
-        );
-        await tx.query(
-          `INSERT INTO aluno_profile(
-             user_id, modalidade, faixa, graduacao_nivel, data_matricula,
-             genero, rg, cpf, data_nascimento, endereco, bairro, cidade, cep, whatsapp,
-             professor_responsavel, responsavel_id, termos_aceitos, termos_aceitos_em, termos_versao,
-             contato_emergencia_nome, contato_emergencia_parentesco, contato_emergencia_telefone,
-             contato_emergencia_telefone2, autoriza_uso_imagem, autoriza_grupo_whatsapp, nivel)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true,now(),$17,
-             $18,$19,$20,$21,$22,$23,$24)`,
-          [
-            user.id,
-            t.modalidade,
-            g.faixa,
-            g.graduacao_nivel,
-            t.data_matricula,
-            a.genero,
-            a.rg,
-            a.cpf,
-            a.data_nascimento,
-            a.endereco,
-            a.bairro,
-            a.cidade,
-            a.cep,
-            a.whatsapp,
-            t.professor_responsavel,
-            responsavelId,
-            termos.versao,
-            e.nome,
-            e.parentesco,
-            e.telefone,
-            e.telefone2,
-            termos.autoriza_uso_imagem,
-            termos.autoriza_grupo_whatsapp,
-            g.nivel,
-          ],
-        );
-        // 3. Histórico de saúde (1:1).
-        await tx.query(
-          `INSERT INTO historico_saude(user_id,tipo_sanguineo,condicoes_medicas,lesoes_cronicas,
-             medicacao_continua,artes_marciais_anteriores,atualizado_por)
-           VALUES($1,$2,$3,$4,$5,$6,$7)`,
-          [
-            user.id,
-            s.tipo_sanguineo,
-            s.condicoes_medicas,
-            s.lesoes_cronicas,
-            s.medicacao_continua,
-            s.artes_marciais_anteriores,
-            r.account.id,
-          ],
-        );
-        return ficha(tx, user.id);
+        const id = await inserirAluno(tx, b, password, r.account.id);
+        return ficha(tx, id);
       });
       return reply.code(201).send(result);
     },

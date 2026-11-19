@@ -336,7 +336,41 @@ export type ApiErrorCode =
   | "CONFLITO"
   | "IDEMPOTENCY_CONFLICT"
   | "CPF_JA_CADASTRADO"
-  | "RESPONSAVEL_NAO_ENCONTRADO";
+  | "RESPONSAVEL_NAO_ENCONTRADO"
+  | "CONVITE_INVALIDO"
+  | "CONVITE_EXPIRADO"
+  | "CONVITE_UTILIZADO"
+  | "CONVITE_REVOGADO";
+
+export type ConviteStatus = "pendente" | "expirado" | "utilizado" | "revogado";
+
+/** `convites` — link de cadastro (o token em si nunca é armazenado). */
+export interface Convite {
+  id: UUID;
+  email_destinatario: string;
+  whatsapp_destinatario: string | null;
+  data_expiracao: ISOTimestamp;
+  status: ConviteStatus;
+  utilizado_em: ISOTimestamp | null;
+  aluno_id: UUID | null;
+  criado_por: UUID;
+  criado_por_nome: string;
+  created_at: ISOTimestamp;
+}
+
+/** Resposta de POST /convites — única vez em que o link (com o token) aparece. */
+export interface ConviteCriado extends Convite {
+  url: string;
+  /** Link wa.me com a mensagem pronta, quando o WhatsApp foi informado. */
+  whatsapp_url: string | null;
+}
+
+/** GET /convites/validar/:token — o mínimo para abrir o formulário. */
+export interface ConviteValido {
+  email: string;
+  data_expiracao: ISOTimestamp;
+  convidado_por: string;
+}
 
 export interface ApiError {
   error: {

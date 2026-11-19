@@ -15,6 +15,7 @@ import { attendanceRoutes } from "./modules/attendance.js";
 import { storeRoutes } from "./modules/store.js";
 import { reportRoutes } from "./modules/reports.js";
 import { cadastroRoutes } from "./modules/cadastro.js";
+import { convitesRoutes } from "./modules/convites.js";
 import { presenceStream } from "./stream.js";
 
 export async function buildApp(
@@ -134,6 +135,7 @@ export async function buildApp(
   storeRoutes(app, ctx);
   reportRoutes(app, ctx);
   cadastroRoutes(app, ctx);
+  convitesRoutes(app, ctx);
   if (options.stream !== false) presenceStream(app, ctx);
   if (config.SERVE_WEB) {
     await app.register(staticFiles, { root: resolve("dist"), prefix: "/", index: "index.html" });

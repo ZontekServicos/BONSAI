@@ -93,6 +93,7 @@ beforeAll(async () => {
   await db.query(await readFile("database/migrations/0004_papeis_modalidades.sql", "utf8"));
   await db.query(await readFile("database/migrations/0005_cadastro_aluno.sql", "utf8"));
   await db.query(await readFile("database/migrations/0006_ajustes_ficha_professor.sql", "utf8"));
+  await db.query(await readFile("database/migrations/0007_convites.sql", "utf8"));
   app = await buildApp(config, db, { logger: false, stream: false });
   await app.ready();
   passwordHash = await hashPassword(password);
@@ -1189,6 +1190,9 @@ describe("migrations", () => {
       // 0005 publicada no commit 54e215e
       "migrations/0005_cadastro_aluno.sql":
         "0d4d147d2ad0e3e4d6e9580b7b703793b7e58e31ac22ff954f15504a6d81e4b3",
+      // 0006 aprovada na auditoria final de 19/11/2026
+      "migrations/0006_ajustes_ficha_professor.sql":
+        "becde7ebd4cef4f92a70107e93bda1436b5221293fb58d56c0e73fa8df54a24c",
     };
     for (const [name, sum] of Object.entries(published)) {
       const raw = (await readFile(`database/${name}`, "utf8")).replace(/\r\n/g, "\n");
@@ -1267,5 +1271,170 @@ describe("migrations", () => {
       await c.query(`DROP SCHEMA IF EXISTS ${up} CASCADE`);
       await c.end();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Convites (0007): link com token → ficha preenchida pelo próprio aluno
+// ---------------------------------------------------------------------------
+describe("registration invites", () => {
+  let professorToken: string;
+  beforeEach(async () => {
+    await user("prof.convite@example.test", "professor");
+    professorToken = (
+      await request("POST", "/auth/login", { email: "prof.convite@example.test", password }, "")
+    ).json().access_token;
+  });
+  const convidar = (email: string, extra: Record<string, unknown> = {}, token?: string) =>
+    request("POST", "/convites", { email, ...extra }, token ?? professorToken);
+  const tokenDe = (url: string) => new URL(url).searchParams.get("token")!;
+  /** Ficha preenchida pelo aluno (sem e-mail: vem do convite). */
+  const ficha = (o: Parameters<typeof cadastro>[0] = {}, extra: Record<string, unknown> = {}) => {
+    const { acesso, ...resto } = cadastro(o);
+    return {
+      ...resto,
+      acesso: { nome: acesso.nome, senha_inicial: acesso.senha_inicial },
+      ...extra,
+    };
+  };
+  const validar = (t: string) => request("GET", `/convites/validar/${t}`, undefined, "");
+  const enviar = (t: string, body: unknown) =>
+    request("POST", `/convites/${t}/cadastro`, body, "");
+
+  it("lets staff create a single-use link and stores only the token hash", async () => {
+    const res = await convidar("novo.aluno@example.test", { whatsapp: "(11) 98888-7777" });
+    expect(res.statusCode).toBe(201);
+    const c = res.json();
+    expect(c).toMatchObject({ email_destinatario: "novo.aluno@example.test", status: "pendente" });
+    expect(c.url).toMatch(/\/cadastro\?token=[A-Za-z0-9_-]{43}$/);
+    expect(c.whatsapp_url).toMatch(/^https:\/\/wa\.me\/5511988887777\?text=/);
+    const token = tokenDe(c.url);
+    const row = await one(db, "SELECT * FROM convites WHERE id=$1", [c.id]);
+    expect(JSON.stringify(row)).not.toContain(token);
+    expect(row.token_hash).toMatch(/^[0-9a-f]{64}$/);
+    // validade padrão de 7 dias
+    const dias = (new Date(row.data_expiracao).getTime() - new Date(row.created_at).getTime()) / 864e5;
+    expect(dias).toBeCloseTo(7, 5);
+    // admin também convida; aluno e anônimo não
+    expect((await convidar("outro@example.test", {}, adminToken)).statusCode).toBe(201);
+    expect((await convidar("x@example.test", {}, studentToken)).statusCode).toBe(403);
+    expect((await convidar("y@example.test", {}, "")).statusCode).toBe(401);
+    // e-mail que já tem conta não recebe convite
+    const dup = await convidar("student@example.test");
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json().error.code).toBe("EMAIL_JA_CADASTRADO");
+    // listagem da equipe não expõe hash nem token
+    const lista = await request("GET", "/convites", undefined, professorToken);
+    expect(lista.json().total).toBe(2);
+    expect(lista.body).not.toContain("token");
+  });
+
+  it("validates the link publicly and refuses unknown, malformed and revoked tokens", async () => {
+    const primeiro = tokenDe((await convidar("ana.convite@example.test")).json().url);
+    const ok = await validar(primeiro);
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ email: "ana.convite@example.test", convidado_por: "Pessoa Teste" });
+    for (const t of ["x".repeat(43), "curto", "a/b"]) {
+      const r = await validar(encodeURIComponent(t));
+      expect(r.statusCode, t).toBe(404);
+      expect(r.json().error.code).toBe("CONVITE_INVALIDO");
+    }
+    // novo convite para o mesmo e-mail cancela o anterior
+    const segundo = tokenDe((await convidar("ana.convite@example.test")).json().url);
+    expect((await validar(primeiro)).json().error.code).toBe("CONVITE_REVOGADO");
+    expect((await validar(segundo)).statusCode).toBe(200);
+    // revogação manual
+    const { id } = await one(db, "SELECT id FROM convites WHERE NOT utilizado AND revogado_em IS NULL");
+    const rev = await request("DELETE", `/convites/${id}`, undefined, professorToken);
+    expect(rev.json().status).toBe("revogado");
+    expect((await validar(segundo)).statusCode).toBe(410);
+  });
+
+  it("refuses expired invites", async () => {
+    const c = (await convidar("atrasado@example.test")).json();
+    // created_at é imutável pelo trigger: desliga só para simular o tempo passando.
+    await db.query("ALTER TABLE convites DISABLE TRIGGER trg_convite_estado_final");
+    await db.query(
+      "UPDATE convites SET created_at = now() - interval '8 days', data_expiracao = now() - interval '1 day' WHERE id=$1",
+      [c.id],
+    );
+    await db.query("ALTER TABLE convites ENABLE TRIGGER trg_convite_estado_final");
+    const r = await validar(tokenDe(c.url));
+    expect(r.statusCode).toBe(410);
+    expect(r.json().error.code).toBe("CONVITE_EXPIRADO");
+    expect((await enviar(tokenDe(c.url), ficha())).statusCode).toBe(410);
+  });
+
+  it("creates the student from the invite with health data and the minor lock, exactly once", async () => {
+    const c = (await convidar("menor.convite@example.test")).json();
+    const token = tokenDe(c.url);
+    const menor = {
+      pessoal: { data_nascimento: shift(todaySP(), -12), whatsapp: null },
+    };
+    // trava de menor: sem responsável não passa
+    const sem = await enviar(token, ficha({ ...menor, treino: { data_matricula: todaySP() } }));
+    expect(sem.statusCode).toBe(400);
+    expect(JSON.stringify(sem.json().error.details)).toContain("responsavel");
+    // vínculo a responsável existente não é aceito no fluxo público
+    const comId = await enviar(
+      token,
+      ficha({ ...menor, treino: { data_matricula: todaySP() } }, {
+        responsavel: { id: randomUUID() },
+      }),
+    );
+    expect(comId.statusCode).toBe(400);
+    // e-mail no corpo não é aceito: a conta usa o e-mail do convite
+    const comEmail = ficha({}, {});
+    (comEmail.acesso as Record<string, unknown>).email = "intruso@example.test";
+    expect((await enviar(token, comEmail)).statusCode).toBe(400);
+
+    const body = ficha({ ...menor, treino: { data_matricula: todaySP() } }, {
+      responsavel: guardian,
+    });
+    const [a, b] = await Promise.all([enviar(token, body), enviar(token, body)]);
+    const codes = [a.statusCode, b.statusCode].sort();
+    expect(codes[0]).toBe(201); // um envio cria a conta…
+    expect([409, 410]).toContain(codes[1]); // …o simultâneo é recusado
+    const criado = (a.statusCode === 201 ? a : b).json();
+    expect(criado.email).toBe("menor.convite@example.test");
+
+    // conta funciona e a ficha veio completa
+    const login = await request(
+      "POST",
+      "/auth/login",
+      { email: "menor.convite@example.test", password: "senha-inicial-123" },
+      "",
+    );
+    expect(login.statusCode).toBe(200);
+    const f = (await request("GET", `/alunos/${criado.id}/ficha`)).json().ficha;
+    expect(f).toMatchObject({
+      menor_de_idade: true,
+      responsavel: { nome: "Maria Responsável" },
+      contato_principal: { origem: "responsavel" },
+      saude: { tipo_sanguineo: "O+", condicoes_medicas: "Asma leve", atualizado_por: criado.id },
+      termos_aceitos: true,
+    });
+    // convite consumido: não abre nem cadastra de novo
+    expect((await validar(token)).json().error.code).toBe("CONVITE_UTILIZADO");
+    const row = await one(db, "SELECT * FROM convites WHERE id=$1", [c.id]);
+    expect(row).toMatchObject({ utilizado: true, aluno_id: criado.id });
+    // estado final é imutável no banco e não pode ser revogado pela API
+    await expect(
+      db.query("UPDATE convites SET utilizado=false, utilizado_em=NULL WHERE id=$1", [c.id]),
+    ).rejects.toMatchObject({ code: "23514" });
+    expect((await request("DELETE", `/convites/${c.id}`, undefined, professorToken)).statusCode).toBe(409);
+  });
+
+  it("keeps the invite usable when the registration fails (rollback)", async () => {
+    const token = tokenDe((await convidar("cpf.repetido@example.test")).json().url);
+    const ocupado = cadastro();
+    expect((await request("POST", "/alunos/cadastro", ocupado, professorToken)).statusCode).toBe(201);
+    const users = await count("users");
+    const dup = await enviar(token, ficha({ pessoal: { cpf: ocupado.pessoal.cpf } }));
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json().error.code).toBe("CPF_JA_CADASTRADO");
+    expect(await count("users")).toBe(users);
+    expect((await validar(token)).statusCode).toBe(200);
+    expect((await enviar(token, ficha())).statusCode).toBe(201);
   });
 });

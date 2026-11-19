@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -31,6 +31,11 @@ import { Card, Form, Notice } from "./components/ui";
 import { Dashboard, Students, Presence } from "./components/Academy";
 import { Finance, Store, Cash } from "./components/Operations";
 import { Member } from "./components/Member";
+
+// Ficha por convite: página pública, carregada só quando aberta (traz o Zod).
+const CadastroPorConvite = lazy(() =>
+  import("./components/Cadastro").then((m) => ({ default: m.CadastroPorConvite })),
+);
 
 // min-h-screen (100vh) como base; onde houver suporte, 100svh = altura VISÍVEL no
 // celular (o 100vh do iOS inclui a área sob a barra do navegador e "estoura" a tela).
@@ -321,6 +326,16 @@ const SUBTITLE: Record<UserRole, string> = {
   aluno: "Acompanhe sua evolução dentro e fora do tatame.",
 };
 export default function App() {
+  // /cadastro?token=… não depende de login: o convite é a credencial.
+  if (window.location.pathname.replace(/\/$/, "") === "/cadastro")
+    return (
+      <Suspense fallback={<main className="min-h-dvh bg-background" />}>
+        <CadastroPorConvite />
+      </Suspense>
+    );
+  return <Painel />;
+}
+function Painel() {
   const [user, setUser] = useState<User | null>(null);
   const [starting, setStarting] = useState(true);
   const [bootError, setBootError] = useState("");

@@ -20,6 +20,9 @@ export const labels: Record<string, string> = {
   pago: "Pago",
   pendente: "Pendente",
   atrasado: "Atrasado",
+  expirado: "Expirado",
+  utilizado: "Utilizado",
+  revogado: "Revogado",
   pix: "Pix",
   dinheiro: "Dinheiro",
   cartao_credito: "Cartão de crédito",
@@ -79,7 +82,9 @@ export function Notice({ error }: { error: string }) {
 }
 export function Status({ value }: { value: string }) {
   return (
-    <span className={`status ${value === "ativo" || value === "pago" ? "active" : ""}`}>
+    <span
+      className={`status ${value === "ativo" || value === "pago" || value === "utilizado" ? "active" : ""}`}
+    >
       {labels[value] ?? value}
     </span>
   );

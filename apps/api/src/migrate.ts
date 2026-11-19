@@ -20,6 +20,7 @@ export async function migrate(connectionString = process.env.DATABASE_URL) {
       "migrations/0004_papeis_modalidades.sql",
       "migrations/0005_cadastro_aluno.sql",
       "migrations/0006_ajustes_ficha_professor.sql",
+      "migrations/0007_convites.sql",
     ]) {
       const raw = await readFile(resolve("database", name), "utf8");
       const checksum = createHash("sha256").update(raw.replace(/\r\n/g, "\n")).digest("hex");

@@ -250,6 +250,30 @@ export const termosSchema = z.strictObject({
   autoriza_grupo_whatsapp: z.boolean("Responda se autoriza a inclusão no grupo de WhatsApp."),
 });
 
+/** Regras entre grupos: trava de menor de idade e matrícula × nascimento. */
+function validarCruzado(
+  b: {
+    pessoal: { data_nascimento: string };
+    treino: { data_matricula: string };
+    responsavel?: unknown;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (menorDeIdade(b.pessoal.data_nascimento) && !b.responsavel)
+    ctx.addIssue({
+      code: "custom",
+      path: ["responsavel"],
+      message: `Aluno menor de ${MAIORIDADE} anos: os dados do responsável são obrigatórios.`,
+    });
+  if (b.treino.data_matricula < b.pessoal.data_nascimento)
+    ctx.addIssue({
+      code: "custom",
+      path: ["treino", "data_matricula"],
+      message: "Data de matrícula anterior à data de nascimento.",
+    });
+}
+
+/** Cadastro feito pela equipe (POST /alunos/cadastro). */
 export const cadastroAlunoSchema = z
   .strictObject({
     acesso: acessoSchema,
@@ -260,22 +284,42 @@ export const cadastroAlunoSchema = z
     saude: saudeSchema,
     termos: termosSchema,
   })
-  .superRefine((b, ctx) => {
-    if (menorDeIdade(b.pessoal.data_nascimento) && !b.responsavel)
-      ctx.addIssue({
-        code: "custom",
-        path: ["responsavel"],
-        message: `Aluno menor de ${MAIORIDADE} anos: os dados do responsável são obrigatórios.`,
-      });
-    if (b.treino.data_matricula < b.pessoal.data_nascimento)
-      ctx.addIssue({
-        code: "custom",
-        path: ["treino", "data_matricula"],
-        message: "Data de matrícula anterior à data de nascimento.",
-      });
-  });
+  .superRefine(validarCruzado);
 
 /** Payload que o front envia (antes da normalização). */
 export type CadastroAlunoInput = z.input<typeof cadastroAlunoSchema>;
 /** Dados já normalizados/validados (o que a API grava). */
 export type CadastroAluno = z.output<typeof cadastroAlunoSchema>;
+
+// ----------------------------------------------------------------------------
+// Cadastro pelo próprio aluno, via link de convite
+// ----------------------------------------------------------------------------
+/** O e-mail vem do convite (não do formulário): o link só cadastra quem foi convidado. */
+export const acessoConviteSchema = acessoSchema.omit({ email: true });
+
+/**
+ * Mesmas etapas e regras do cadastro da equipe, com duas diferenças:
+ * sem e-mail (vem do convite) e responsável sempre NOVO — vincular a um
+ * responsável existente (`{ id }`) exporia dados de terceiros a um usuário
+ * não autenticado.
+ */
+export const cadastroConviteSchema = z
+  .strictObject({
+    acesso: acessoConviteSchema,
+    treino: treinoSchema,
+    pessoal: pessoalSchema,
+    responsavel: novoResponsavelSchema.optional(),
+    contato_emergencia: contatoEmergenciaSchema,
+    saude: saudeSchema,
+    termos: termosSchema,
+  })
+  .superRefine(validarCruzado);
+export type CadastroConviteInput = z.input<typeof cadastroConviteSchema>;
+
+/** POST /convites — quem convida informa o e-mail (e, se quiser, o WhatsApp). */
+export const VALIDADE_CONVITE_DIAS = 7;
+export const novoConviteSchema = z.strictObject({
+  email: z.email("E-mail inválido.").max(254),
+  whatsapp: telefoneSchema.nullish().transform((v) => v ?? null),
+  validade_dias: z.number().int().min(1).max(30).default(VALIDADE_CONVITE_DIAS),
+});

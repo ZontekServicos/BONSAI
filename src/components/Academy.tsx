@@ -8,6 +8,8 @@ import type {
   Attendance,
   AlunoProfile,
   Modalidade,
+  Convite,
+  ConviteCriado,
 } from "../types/contract";
 import { MODALIDADE_COM_FAIXA } from "../types/contract";
 import { api, errorMessage } from "../lib/api";
@@ -83,6 +85,110 @@ function ModalidadeSelect({
         </label>
       </div>
     </div>
+  );
+}
+
+/** Convite por link: o aluno preenche a própria ficha em /cadastro?token=…. */
+function Convites({ onClose }: { onClose: () => void }) {
+  const [criado, setCriado] = useState<ConviteCriado>();
+  const [copiado, setCopiado] = useState(false);
+  const [page, setPage] = useState(1);
+  const lista = useResource<Paginated<Convite>>(`/convites?page=${page}`);
+  async function copiar(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiado(true);
+    } catch {
+      // Sem permissão de área de transferência: o campo fica selecionado para Ctrl+C.
+      (document.getElementById("convite-url") as HTMLInputElement | null)?.select();
+    }
+  }
+  return (
+    <Card
+      title="Convidar aluno"
+      action={
+        <button className="secondary" onClick={onClose}>
+          Fechar
+        </button>
+      }
+    >
+      <p>
+        O aluno recebe um link de uso único, válido por 7 dias, e preenche a ficha completa
+        (dados, saúde, responsável se for menor e termo). A conta é criada com o e-mail convidado.
+      </p>
+      <Form
+        fields={[
+          { name: "email", label: "E-mail do aluno", type: "email" },
+          {
+            name: "whatsapp",
+            label: "WhatsApp (opcional, para enviar o link)",
+            type: "tel",
+            required: false,
+          },
+        ]}
+        submit="Gerar link de convite"
+        onSubmit={async (b) => {
+          const c = await api<ConviteCriado>("/convites", {
+            method: "POST",
+            body: { email: b.email, whatsapp: b.whatsapp || null },
+          });
+          setCriado(c);
+          setCopiado(false);
+          lista.reload();
+        }}
+      />
+      {criado && (
+        <div className="data-form">
+          <div className="modal-fields">
+            <label className="full">
+              Link para {criado.email_destinatario} · válido até {day(criado.data_expiracao)}
+              <input id="convite-url" readOnly value={criado.url} onFocus={(e) => e.target.select()} />
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="primary" type="button" onClick={() => void copiar(criado.url)}>
+              {copiado ? "Link copiado" : "Copiar link de convite"}
+            </button>
+            {criado.whatsapp_url && (
+              <a className="secondary" href={criado.whatsapp_url} target="_blank" rel="noreferrer">
+                Enviar pelo WhatsApp
+              </a>
+            )}
+          </div>
+          <small>O link aparece só agora. Se perder, gere outro: o anterior é cancelado.</small>
+        </div>
+      )}
+      <Loading {...lista} />
+      <Table
+        headers={["E-mail", "Status", "Validade", "Enviado por", ""]}
+        empty={lista.data?.data.length === 0}
+      >
+        {lista.data?.data.map((c) => (
+          <tr key={c.id}>
+            <td>{c.email_destinatario}</td>
+            <td>
+              <Status value={c.status} />
+            </td>
+            <td>{day(c.data_expiracao)}</td>
+            <td>{c.criado_por_nome}</td>
+            <td>
+              {(c.status === "pendente" || c.status === "expirado") && (
+                <button
+                  className="secondary"
+                  onClick={async () => {
+                    await api(`/convites/${c.id}`, { method: "DELETE" });
+                    lista.reload();
+                  }}
+                >
+                  Revogar
+                </button>
+              )}
+            </td>
+          </tr>
+        ))}
+      </Table>
+      <Pager page={page} total={lista.data?.total ?? 0} onPage={setPage} />
+    </Card>
   );
 }
 
@@ -258,6 +364,7 @@ export function Students({ canManage = true }: { canManage?: boolean }) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string>();
   const [adding, setAdding] = useState(false);
+  const [inviting, setInviting] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => {
       setSearch(q);
@@ -284,11 +391,16 @@ export function Students({ canManage = true }: { canManage?: boolean }) {
       <Card
         title="Base de alunos"
         action={
-          canManage && (
-            <button className="primary" onClick={() => setAdding(!adding)}>
-              {adding ? "Fechar cadastro" : "Novo aluno"}
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary" onClick={() => setInviting(!inviting)}>
+              {inviting ? "Fechar convites" : "Convidar aluno"}
             </button>
-          )
+            {canManage && (
+              <button className="primary" onClick={() => setAdding(!adding)}>
+                {adding ? "Fechar cadastro" : "Novo aluno"}
+              </button>
+            )}
+          </div>
         }
       >
         <label className="search">
@@ -325,6 +437,7 @@ export function Students({ canManage = true }: { canManage?: boolean }) {
         </Table>
         <Pager page={page} total={r.data?.total ?? 0} onPage={setPage} />
       </Card>
+      {inviting && <Convites onClose={() => setInviting(false)} />}
       {canManage && adding && (
         <NewStudent
           onDone={() => {
