@@ -14,8 +14,54 @@ import {
   paginate,
   found,
   fail,
+  text,
+  STAFF,
   type Context,
 } from "../http.js";
+
+/**
+ * Painel de gestão ativa (GET /financeiro/mensalidades).
+ *
+ * Um registro por aluno não inativo, com o status da competência ATUAL
+ * (mês corrente em America/Sao_Paulo):
+ *   pago     → existe entrada 'mensalidade' no cash_flow ligada (payment_id) a
+ *              uma cobrança do aluno com vencimento neste mês;
+ *   pendente → não existe (inclusive quando a cobrança do mês nem foi gerada).
+ * A competência vem do VENCIMENTO, não da data do lançamento: quitar em
+ * novembro a mensalidade atrasada de outubro não torna novembro "pago".
+ * Não expõe valores: o professor enxerga status e vencimento, nada mais.
+ */
+const PAINEL_SQL = `
+  WITH ref AS (SELECT date_trunc('month', fn_hoje_sp())::date AS ini),
+  alunos AS (
+    SELECT u.id AS user_id, u.nome, u.status AS status_aluno, p.modalidade,
+           cob.payment_id,
+           coalesce(cob.data_vencimento,
+             -- sem cobrança gerada: vencimento previsto pelo dia padrão de cobrança
+             (ref.ini + (least($1::int, extract(day FROM ref.ini + interval '1 month - 1 day')::int) - 1))
+           ) AS data_vencimento,
+           (cob.payment_id IS NOT NULL) AS cobranca_gerada,
+           pago.data AS pago_em,
+           CASE WHEN pago.transaction_id IS NULL THEN 'pendente' ELSE 'pago' END AS status
+      FROM users u
+      JOIN aluno_profile p ON p.user_id = u.id
+      CROSS JOIN ref
+      LEFT JOIN LATERAL (
+        SELECT f.payment_id, f.data_vencimento FROM financeiro f
+         WHERE f.user_id = u.id
+           AND f.data_vencimento >= ref.ini AND f.data_vencimento < ref.ini + interval '1 month'
+         ORDER BY f.data_vencimento, f.payment_id LIMIT 1
+      ) cob ON true
+      LEFT JOIN LATERAL (
+        SELECT c.transaction_id, c.data FROM cash_flow c
+          JOIN financeiro f ON f.payment_id = c.payment_id
+         WHERE c.tipo = 'entrada' AND c.categoria = 'mensalidade'
+           AND f.user_id = u.id
+           AND f.data_vencimento >= ref.ini AND f.data_vencimento < ref.ini + interval '1 month'
+         ORDER BY c.data DESC LIMIT 1
+      ) pago ON true
+     WHERE u.role = 'aluno' AND u.status <> 'inativo'
+  )`;
 
 export async function situation(db: DB, id: string, config: Config) {
   const row = await one(db, "SELECT fn_sincronizar_status_aluno($1,$2) AS status", [
@@ -269,5 +315,52 @@ export function billingRoutes(app: FastifyInstance, ctx: Context) {
     FROM financeiro WHERE data_vencimento >= $1::date AND data_vencimento < $1::date+interval '1 month'`,
         [`${q.competencia}-01`],
       ),
+  );
+
+  route(
+    app,
+    ctx,
+    "GET",
+    "/financeiro/mensalidades",
+    {
+      role: STAFF,
+      query: z.strictObject({
+        ...page,
+        // aceita ?status=pendente ou ?status=PENDENTE
+        status: z.preprocess(
+          (v) => (typeof v === "string" ? v.toLowerCase() : v),
+          z.enum(["pago", "pendente"]).optional(),
+        ),
+        q: text().optional(),
+      }),
+    },
+    async (_r, _s, _b, q) => {
+      const lista = await paginate(
+        db,
+        `${PAINEL_SQL}
+         SELECT user_id, nome, status_aluno, modalidade, payment_id,
+                to_char(data_vencimento, 'YYYY-MM-DD') AS data_vencimento,
+                cobranca_gerada, pago_em, status
+           FROM alunos
+          WHERE ($2::text IS NULL OR status = $2)
+            AND ($3::text IS NULL OR nome ILIKE '%'||$3||'%')
+          ORDER BY (status = 'pendente') DESC, data_vencimento, nome, user_id`,
+        [config.BILLING_DUE_DAY, q.status ?? null, q.q ?? null],
+        { page: q.page, page_size: q.page_size },
+      );
+      // Contadores para as abas (independem do filtro de status).
+      const resumo = await one(
+        db,
+        `${PAINEL_SQL}
+         SELECT to_char((SELECT ini FROM ref), 'YYYY-MM') AS competencia,
+                count(*)::int AS todos,
+                count(*) FILTER (WHERE status = 'pago')::int AS pago,
+                count(*) FILTER (WHERE status = 'pendente')::int AS pendente
+           FROM alunos WHERE ($2::text IS NULL OR nome ILIKE '%'||$2||'%')`,
+        [config.BILLING_DUE_DAY, q.q ?? null],
+      );
+      const { competencia, ...contagem } = resumo;
+      return { ...lista, competencia, resumo: contagem };
+    },
   );
 }

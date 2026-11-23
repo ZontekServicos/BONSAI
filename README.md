@@ -47,6 +47,8 @@ pnpm.cmd test
 pnpm.cmd audit
 ```
 
+**`TEST_DATABASE_URL` é obrigatória.** Sem ela a suíte não roda nenhum teste e para com `Set TEST_DATABASE_URL to a PostgreSQL database named bonsai_test.` A base precisa se chamar exatamente `bonsai_test`. Em Bash: `TEST_DATABASE_URL=postgresql://USUARIO:SENHA@localhost:5432/bonsai_test pnpm test`. O passo a passo completo está em `docs/MAPA_TECNICO.md`, seção 11.
+
 Os testes criam um schema aleatório na base `bonsai_test` e removem apenas esse schema ao terminar. Exercitam a API com PostgreSQL real, incluindo requisições concorrentes. O usuário de teste precisa de permissão para criar schemas e as extensões `citext`/`pgcrypto`/`pg_trgm`. Execute o build antes dos testes, pois a suíte também verifica a entrega do React compilado.
 
 `pnpm.cmd audit:queries`, com o mesmo `TEST_DATABASE_URL`, executa EXPLAIN ANALYZE em um schema temporário com 5.000 alunos e 10.000 lançamentos. O resultado é salvo em `docs/QUERY_AUDIT.json`.

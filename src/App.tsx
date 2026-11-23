@@ -31,6 +31,7 @@ import { api, login, logout, refresh, errorMessage, streamPresence } from "./lib
 import { Card, Form, Notice } from "./components/ui";
 import { Dashboard, Students, Presence } from "./components/Academy";
 import { Finance, Store, Cash } from "./components/Operations";
+import { PainelMensalidades } from "./components/PainelMensalidades";
 import { Member } from "./components/Member";
 import { Loja } from "./components/Loja";
 
@@ -323,7 +324,7 @@ const items = [
 /** Telas por papel; a primeira é a inicial. A API aplica o mesmo RBAC. */
 const VIEWS: Record<UserRole, View[]> = {
   admin: ["dashboard", "students", "presence", "finance", "store", "cash", "password"],
-  professor: ["students", "presence", "password"],
+  professor: ["students", "presence", "finance", "password"],
   aluno: ["dashboard", "loja", "password"],
 };
 const ROLE_LABEL: Record<UserRole, string> = {
@@ -514,7 +515,8 @@ function Painel() {
             {current === "dashboard" && <Dashboard tick={tick} />}
             {current === "students" && <Students canManage={user.role === "admin"} />}
             {current === "presence" && <Presence tick={tick} />}
-            {current === "finance" && <Finance />}
+            {current === "finance" &&
+              (user.role === "admin" ? <Finance /> : <PainelMensalidades tick={tick} />)}
             {current === "store" && <Store />}
             {current === "cash" && <Cash />}
           </>

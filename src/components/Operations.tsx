@@ -12,6 +12,7 @@ import type {
 import { api, errorMessage } from "../lib/api";
 import { prepararImagem } from "../lib/preparar-imagem";
 import { StudentPicker } from "./Academy";
+import { PainelMensalidades } from "./PainelMensalidades";
 import {
   Card,
   Form,
@@ -214,8 +215,9 @@ export function Finance() {
           </div>
         )}
       </Card>
+      <PainelMensalidades tick={revision} />
       <Card
-        title="Mensalidades"
+        title="Cobranças"
         action={
           <select
             aria-label="Filtrar status"

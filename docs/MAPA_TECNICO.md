@@ -113,7 +113,7 @@ Funções: `fn_hoje_sp`, `fn_pendencias_bloqueantes`, `fn_sincronizar_status_alu
 
 Convenções: dinheiro em `NUMERIC`, trafega como **string** no JSON; datas `YYYY-MM-DD`; timestamps ISO com fuso; nada financeiro é apagado fisicamente.
 
-## 6. API — `/api/v1` (69 rotas)
+## 6. API — `/api/v1` (70 rotas)
 
 Papel: `public` = sem login · `qualquer` = qualquer autenticado (com `staffOrSelf`/`selfOrAdmin` quando há `:id`) · `STAFF` = `admin` + `professor` · `admin` · `aluno`.
 
@@ -129,6 +129,7 @@ Papel: `public` = sem login · `qualquer` = qualquer autenticado (com `staffOrSe
 | equipe        | `GET /professores` · `POST /professores` · `PATCH /professores/:id/status` (inativar revoga sessões)                                                                                                         | admin                          |
 | convites | `POST /convites` (`{email, whatsapp?, validade_dias?}` → `url` + `whatsapp_url`; o link só aparece aqui) · `GET /convites?status=` · `DELETE /convites/:id` (revoga) | STAFF |
 | perfil | `PATCH /me/perfil` = `PATCH /profile` (`{foto_url?, altura?, peso?}`; `foto_url` só `null` ou a própria foto atual; só números, ponto ou vírgula, 2 casas; `null` apaga; renova `medidas_atualizadas_em`) · `PUT /me/foto` (corpo binário `image/webp`/`image/jpeg` ≤ 512 KB, **decodificado e regravado no servidor com `sharp`**: sem EXIF, ≤ 512 px, ≤ 16 MP) · `DELETE /me/foto` | aluno (só o próprio) |
+| financeiro | `GET /financeiro/mensalidades` (painel: 1 item por aluno não inativo; `status` = `pago` se há entrada `mensalidade` no `cash_flow` ligada a cobrança com **vencimento** no mês atual de SP, senão `pendente`; `?status=` (sem diferenciar maiúsculas), `q`, paginação; `resumo` com contagens das abas; **sem valores**) | STAFF |
 | loja | `GET /loja/produtos` (catálogo: `id, nome, descricao, preco, imagem_url, estoque, categoria`, só ativos) | qualquer logado |
 | loja | `POST /loja/pedido` (`{produto_id, quantidade?}` → `{pedido, whatsapp_url}`; mensagem "Olá, gostaria de adquirir o item …"; 409 `PRODUTO_ESGOTADO`; 503 `LOJA_SEM_WHATSAPP`; 10/min por aluno) | aluno |
 | loja | `GET /loja/pedidos` · `PATCH /loja/pedidos/:id` (`atendido`/`cancelado`; 409 `PEDIDO_FINALIZADO`) · `PUT`/`DELETE /produtos/:id/imagem` | admin |
@@ -233,10 +234,35 @@ Fonte display: Barlow Condensed (títulos itálicos extra-bold); corpo: Archivo.
 | `pnpm demo:seed`                          | contas demo (dev; usa `.env`)                                                        |
 | `pnpm job:daily`                          | job diário manual                                                                    |
 
+### Como rodar a suíte de testes (obrigatório: `TEST_DATABASE_URL`)
+
+A suíte é de **integração com PostgreSQL real**, sem mocks. Sem `TEST_DATABASE_URL` ela não executa nenhum teste e para logo no carregamento com:
+`Error: Set TEST_DATABASE_URL to a PostgreSQL database named bonsai_test.`
+
+1. **PostgreSQL 15 ou superior** (CI e ambiente local usam o 18), com um usuário que possa criar schemas e as extensões `citext`, `pgcrypto` e `pg_trgm` (o `postgres` serve).
+2. **Base separada chamada exatamente `bonsai_test`**; o nome é conferido e qualquer outro é recusado. Nunca aponte para a base da aplicação.
+   ```bash
+   createdb -U postgres bonsai_test     # ou: psql -U postgres -c "create database bonsai_test"
+   ```
+3. **Build antes** (`pnpm build`): um teste confere o React compilado em `dist/`.
+4. **Rodar:**
+   ```bash
+   # Bash / Linux / CI
+   TEST_DATABASE_URL=postgresql://USUARIO:SENHA@localhost:5432/bonsai_test pnpm test
+   ```
+   ```powershell
+   # PowerShell
+   $env:TEST_DATABASE_URL = 'postgresql://USUARIO:SENHA@localhost:5432/bonsai_test'; pnpm.cmd test
+   ```
+   Para listar teste por teste: `pnpm test --reporter=verbose`.
+
+Cada execução cria um schema aleatório dentro de `bonsai_test` e apaga só esse schema no fim; dá para rodar de novo sem limpar nada. O workflow `.github/workflows/ci.yml` faz o mesmo com um serviço Postgres 18.
+
 ## 12. Qualidade e CI
 
 - **`.github/workflows/ci.yml`** (push e PR): Postgres 18 → `pnpm install --frozen-lockfile` → `lint:colors` → `build` → `test` → `pnpm audit --prod --audit-level=high`.
-- **Último resultado local (19/11):** typecheck ok, builds ok, **56/56 testes** (perfil: medidas estritas, foto com assinatura/tipo/tamanho, troca e remoção; checksums 0001–0007, upgrade 0005→0006, convites: hash do token, expiração, revogação, uso único concorrente, rollback), credenciais demo ausentes do bundle; upgrade real validado (0005→0006 e 0006→0007 com `migrate.ts`); fluxo de convite percorrido no Chrome headless (mobile e desktop).
+- **Último resultado local (23/11, cluster Postgres 18 recém-criado):** typecheck ok, builds ok, `lint:colors` ok, **59/59 testes em 26 s** (inclui os 3 do painel de mensalidades); painel medido em 320px no Chrome headless sem rolagem horizontal da página.
+- **Resultado anterior (19/11):** typecheck ok, builds ok, **56/56 testes** (perfil: medidas estritas, foto com assinatura/tipo/tamanho, troca e remoção; checksums 0001–0007, upgrade 0005→0006, convites: hash do token, expiração, revogação, uso único concorrente, rollback), credenciais demo ausentes do bundle; upgrade real validado (0005→0006 e 0006→0007 com `migrate.ts`); fluxo de convite percorrido no Chrome headless (mobile e desktop).
 - **Cobertura dos testes:** JWT (expirado/forjado/contexto/algoritmo), RBAC/IDOR, origem e headers, rotação/replay/corrida de refresh, revogação, carência e bloqueio da carteirinha, check-in concorrente, pagamento duplo, caixa imutável, mensalidades idempotentes (inclusive 29/02), venda concorrente do último item, idempotência de venda, rollback de carrinho, SSE via LISTEN, path traversal no static, relatórios.
 - **Codex Security:** workflows removidos temporariamente (`15e9f86`). O relatório (`docs/CODEX_SECURITY_REPORT.md`) está **parcial**: Deep Scan interrompido por cota. Para reativar: configurar o Environment `codex-security` protegido **antes** de reverter `15e9f86`.
 

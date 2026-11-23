@@ -305,6 +305,31 @@ export interface Paginated<T> {
   total: number;
 }
 
+/** Status da competência atual no painel: pago = há entrada no cash_flow. */
+export type StatusMensalidadePainel = "pago" | "pendente";
+
+/** GET /financeiro/mensalidades — um item por aluno não inativo (sem valores). */
+export interface MensalidadePainelItem {
+  user_id: UUID;
+  nome: string;
+  status_aluno: UserStatus;
+  modalidade: Modalidade;
+  /** Cobrança do mês, se já gerada. */
+  payment_id: UUID | null;
+  /** Vencimento da cobrança do mês, ou o previsto pelo dia padrão se não gerada. */
+  data_vencimento: ISODate;
+  cobranca_gerada: boolean;
+  pago_em: ISOTimestamp | null;
+  status: StatusMensalidadePainel;
+}
+
+export interface PainelMensalidades extends Paginated<MensalidadePainelItem> {
+  /** YYYY-MM (mês corrente em America/Sao_Paulo). */
+  competencia: string;
+  /** Contagens para as abas (ignoram o filtro de status). */
+  resumo: { todos: number; pago: number; pendente: number };
+}
+
 export interface Carteirinha {
   numero_matricula: number;
   nome: string;

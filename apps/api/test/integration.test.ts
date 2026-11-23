@@ -1919,3 +1919,110 @@ describe("store catalog and purchase intent", () => {
     ).rejects.toMatchObject({ code: "23514", constraint: "ck_product_imagem_url" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Painel de gestão ativa: GET /financeiro/mensalidades
+// PAGO = entrada 'mensalidade' no cash_flow ligada a cobrança com vencimento no
+// mês atual (America/Sao_Paulo); caso contrário PENDENTE.
+// ---------------------------------------------------------------------------
+describe("active billing panel (GET /financeiro/mensalidades)", () => {
+  let professorToken: string;
+  const ids: Record<string, string> = {};
+  /** Cobrança com vencimento relativo ao 1º dia do mês atual. */
+  const cobranca = async (id: string, diasDoInicioDoMes: number) =>
+    (
+      await one(
+        db,
+        `INSERT INTO financeiro(user_id, valor, data_vencimento)
+         VALUES ($1, '150.00', date_trunc('month', fn_hoje_sp())::date + $2::int) RETURNING payment_id`,
+        [id, diasDoInicioDoMes],
+      )
+    ).payment_id as string;
+  const pagar = (payment_id: string) =>
+    request("PATCH", `/mensalidades/${payment_id}/pagar`, { metodo_pagamento: "pix" });
+  const painel = (query = "", token = adminToken) =>
+    request("GET", `/financeiro/mensalidades${query}`, undefined, token);
+  const doPainel = (body: { data: { user_id: string }[] }) =>
+    Object.fromEntries(
+      body.data.filter((i) => Object.values(ids).includes(i.user_id)).map((i) => [i.user_id, i]),
+    ) as Record<string, Record<string, unknown>>;
+
+  beforeEach(async () => {
+    await user("prof.painel@example.test", "professor");
+    professorToken = (
+      await request("POST", "/auth/login", { email: "prof.painel@example.test", password }, "")
+    ).json().access_token;
+    for (const k of ["pagou", "devendo", "semCobranca", "pagouMesPassado", "pagoSemCaixa", "inativo"])
+      ids[k] = await user(`${k.toLowerCase()}@painel.test`);
+    // 1. pagou a mensalidade deste mês → cash_flow 'mensalidade'
+    expect((await pagar(await cobranca(ids.pagou, 9))).statusCode).toBe(200);
+    // 2. cobrança deste mês em aberto
+    await cobranca(ids.devendo, 9);
+    // 3. sem cobrança gerada neste mês (fica 'pendente' com vencimento previsto)
+    // 4. quitou HOJE a mensalidade do mês PASSADO: não vale para o mês atual
+    expect((await pagar(await cobranca(ids.pagouMesPassado, -20))).statusCode).toBe(200);
+    await cobranca(ids.pagouMesPassado, 9);
+    // 5. cobrança marcada 'pago' sem lançamento no caixa: a regra é o cash_flow
+    const sem = await cobranca(ids.pagoSemCaixa, 9);
+    await db.query(
+      "UPDATE financeiro SET status='pago', data_pagamento=fn_hoje_sp(), metodo_pagamento='pix' WHERE payment_id=$1",
+      [sem],
+    );
+    // 6. aluno inativo não aparece, mesmo pago
+    await pagar(await cobranca(ids.inativo, 9));
+    await db.query("UPDATE users SET status='inativo' WHERE id=$1", [ids.inativo]);
+  });
+
+  it("computes PAGO only from a cash_flow entry for the current month's bill", async () => {
+    const res = await painel("?page_size=100");
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.competencia).toBe(todaySP().slice(0, 7));
+    const p = doPainel(body);
+    expect(p[ids.pagou]).toMatchObject({ status: "pago", cobranca_gerada: true });
+    expect(p[ids.pagou].pago_em).not.toBeNull();
+    expect(p[ids.devendo]).toMatchObject({ status: "pendente", cobranca_gerada: true, pago_em: null });
+    expect(p[ids.semCobranca]).toMatchObject({
+      status: "pendente",
+      cobranca_gerada: false,
+      payment_id: null,
+      // sem cobrança: vencimento previsto pelo dia padrão (BILLING_DUE_DAY = 10)
+      data_vencimento: `${todaySP().slice(0, 7)}-10`,
+    });
+    expect(p[ids.pagouMesPassado]).toMatchObject({ status: "pendente" });
+    expect(p[ids.pagoSemCaixa]).toMatchObject({ status: "pendente" });
+    expect(p[ids.inativo]).toBeUndefined();
+    expect(p[ids.devendo].data_vencimento).toBe(shift(`${todaySP().slice(0, 7)}-01`, 0, 9));
+    // painel não expõe valores
+    expect(res.body).not.toContain("150.00");
+    expect(p[ids.pagou]).not.toHaveProperty("valor");
+    // contadores das abas batem com a lista
+    expect(body.resumo.todos).toBe(body.total);
+    expect(body.resumo.pago + body.resumo.pendente).toBe(body.resumo.todos);
+  });
+
+  it("filters on the server by ?status (case-insensitive) and keeps tab counts", async () => {
+    const pendentes = (await painel("?status=pendente&page_size=100")).json();
+    expect(pendentes.data.every((i: { status: string }) => i.status === "pendente")).toBe(true);
+    expect(Object.keys(doPainel(pendentes)).sort()).toEqual(
+      [ids.devendo, ids.semCobranca, ids.pagouMesPassado, ids.pagoSemCaixa].sort(),
+    );
+    const pagos = (await painel("?status=PAGO&page_size=100")).json();
+    expect(Object.keys(doPainel(pagos))).toEqual([ids.pagou]);
+    expect(pagos.total).toBe(pagos.resumo.pago);
+    expect(pendentes.total).toBe(pendentes.resumo.pendente);
+    // busca por nome combina com o filtro
+    expect((await painel("?status=pendente&q=nenhum-aluno-assim")).json().total).toBe(0);
+    for (const q of ["?status=atrasado", "?status=", "?extra=1"])
+      expect((await painel(q)).statusCode, q).toBe(400);
+  });
+
+  it("is available to admin and professor only", async () => {
+    expect((await painel("", adminToken)).statusCode).toBe(200);
+    expect((await painel("", professorToken)).statusCode).toBe(200);
+    expect((await painel("", studentToken)).statusCode).toBe(403);
+    expect((await painel("", "")).statusCode).toBe(401);
+    // o restante do financeiro continua só do gestor
+    expect((await request("GET", "/mensalidades", undefined, professorToken)).statusCode).toBe(403);
+  });
+});
