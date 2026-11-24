@@ -1952,7 +1952,14 @@ describe("active billing panel (GET /financeiro/mensalidades)", () => {
     professorToken = (
       await request("POST", "/auth/login", { email: "prof.painel@example.test", password }, "")
     ).json().access_token;
-    for (const k of ["pagou", "devendo", "semCobranca", "pagouMesPassado", "pagoSemCaixa", "inativo"])
+    for (const k of [
+      "pagou",
+      "devendo",
+      "semCobranca",
+      "pagouMesPassado",
+      "pagoSemCaixa",
+      "inativo",
+    ])
       ids[k] = await user(`${k.toLowerCase()}@painel.test`);
     // 1. pagou a mensalidade deste mês → cash_flow 'mensalidade'
     expect((await pagar(await cobranca(ids.pagou, 9))).statusCode).toBe(200);
@@ -1981,7 +1988,11 @@ describe("active billing panel (GET /financeiro/mensalidades)", () => {
     const p = doPainel(body);
     expect(p[ids.pagou]).toMatchObject({ status: "pago", cobranca_gerada: true });
     expect(p[ids.pagou].pago_em).not.toBeNull();
-    expect(p[ids.devendo]).toMatchObject({ status: "pendente", cobranca_gerada: true, pago_em: null });
+    expect(p[ids.devendo]).toMatchObject({
+      status: "pendente",
+      cobranca_gerada: true,
+      pago_em: null,
+    });
     expect(p[ids.semCobranca]).toMatchObject({
       status: "pendente",
       cobranca_gerada: false,
@@ -1993,9 +2004,14 @@ describe("active billing panel (GET /financeiro/mensalidades)", () => {
     expect(p[ids.pagoSemCaixa]).toMatchObject({ status: "pendente" });
     expect(p[ids.inativo]).toBeUndefined();
     expect(p[ids.devendo].data_vencimento).toBe(shift(`${todaySP().slice(0, 7)}-01`, 0, 9));
-    // painel não expõe valores
-    expect(res.body).not.toContain("150.00");
-    expect(p[ids.pagou]).not.toHaveProperty("valor");
+    // valores: o gestor recebe o valor da cobrança do mês (para a baixa rápida)...
+    expect(p[ids.devendo].valor).toBe("150.00");
+    expect(p[ids.semCobranca].valor).toBeNull();
+    // ...o professor não recebe nenhum valor
+    const prof = await painel("?page_size=100", professorToken);
+    expect(prof.statusCode).toBe(200);
+    expect(prof.body).not.toContain("150.00");
+    expect(doPainel(prof.json())[ids.devendo]).not.toHaveProperty("valor");
     // contadores das abas batem com a lista
     expect(body.resumo.todos).toBe(body.total);
     expect(body.resumo.pago + body.resumo.pendente).toBe(body.resumo.todos);
@@ -2024,5 +2040,184 @@ describe("active billing panel (GET /financeiro/mensalidades)", () => {
     expect((await painel("", "")).statusCode).toBe(401);
     // o restante do financeiro continua só do gestor
     expect((await request("GET", "/mensalidades", undefined, professorToken)).statusCode).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Baixa rápida: POST /financeiro/baixa (só gestor)
+// Uma transação: entrada 'mensalidade' no cash_flow + cobrança marcada como paga.
+// ---------------------------------------------------------------------------
+describe("quick payment (POST /financeiro/baixa)", () => {
+  let professorToken: string;
+  let aluno: string;
+  let cobranca: string;
+  const baixa = (body: Record<string, unknown>, token = adminToken) =>
+    request("POST", "/financeiro/baixa", body, token);
+  const estado = async (payment_id: string) => ({
+    financeiro: await one(
+      db,
+      "SELECT status, valor, data_pagamento::text, metodo_pagamento FROM financeiro WHERE payment_id=$1",
+      [payment_id],
+    ),
+    caixa: (
+      await db.query(
+        "SELECT tipo, categoria, valor, motivo, registrado_por FROM cash_flow WHERE payment_id=$1",
+        [payment_id],
+      )
+    ).rows,
+  });
+
+  beforeEach(async () => {
+    await user("prof.baixa@example.test", "professor");
+    professorToken = (
+      await request("POST", "/auth/login", { email: "prof.baixa@example.test", password }, "")
+    ).json().access_token;
+    aluno = await user("aluno.baixa@example.test");
+    cobranca = (
+      await one(
+        db,
+        `INSERT INTO financeiro(user_id, valor, data_vencimento)
+         VALUES ($1, '150.00', date_trunc('month', fn_hoje_sp())::date + 9) RETURNING payment_id`,
+        [aluno],
+      )
+    ).payment_id;
+  });
+
+  it("records the cash entry AND marks the bill as paid in one step", async () => {
+    const res = await baixa({ payment_id: cobranca, valor_pago: "150.00" });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.mensalidade).toMatchObject({ payment_id: cobranca, status: "pago" });
+    expect(body.lancamento).toMatchObject({
+      payment_id: cobranca,
+      tipo: "entrada",
+      categoria: "mensalidade",
+      valor: "150.00",
+    });
+    const e = await estado(cobranca);
+    expect(e.financeiro).toMatchObject({
+      status: "pago",
+      valor: "150.00",
+      data_pagamento: todaySP(),
+      metodo_pagamento: "pix", // padrão quando não informado
+    });
+    expect(e.caixa).toEqual([
+      {
+        tipo: "entrada",
+        categoria: "mensalidade",
+        valor: "150.00",
+        motivo: `Mensalidade ${cobranca}`,
+        registrado_por: admin,
+      },
+    ]);
+    // o painel passa a mostrar o aluno como pago
+    const painel = (await request("GET", "/financeiro/mensalidades?status=pago")).json();
+    expect(painel.data.map((i: { user_id: string }) => i.user_id)).toContain(aluno);
+  });
+
+  it("stores the amount actually received and reports it as received", async () => {
+    const competencia = todaySP().slice(0, 7);
+    const antes = (await request("GET", `/financeiro/resumo?competencia=${competencia}`)).json();
+    const res = await baixa({
+      payment_id: cobranca,
+      valor_pago: "120.00",
+      metodo_pagamento: "dinheiro",
+    });
+    expect(res.statusCode).toBe(201);
+    const e = await estado(cobranca);
+    // a cobrança guarda o valor cobrado; o caixa, o valor recebido
+    expect(e.financeiro).toMatchObject({ valor: "150.00", metodo_pagamento: "dinheiro" });
+    expect(e.caixa).toHaveLength(1);
+    expect(e.caixa[0]).toMatchObject({
+      valor: "120.00",
+      motivo: `Mensalidade ${cobranca} (cobrado 150.00)`,
+    });
+    const depois = (await request("GET", `/financeiro/resumo?competencia=${competencia}`)).json();
+    expect(Number(depois.recebido) - Number(antes.recebido)).toBeCloseTo(120, 2);
+    expect(depois.previsto).toBe(antes.previsto);
+  });
+
+  it("forbids professors (403), students (403) and anonymous users (401), writing nothing", async () => {
+    expect(
+      (await baixa({ payment_id: cobranca, valor_pago: "150.00" }, professorToken)).statusCode,
+    ).toBe(403);
+    expect(
+      (await baixa({ payment_id: cobranca, valor_pago: "150.00" }, studentToken)).statusCode,
+    ).toBe(403);
+    expect((await baixa({ payment_id: cobranca, valor_pago: "150.00" }, "")).statusCode).toBe(401);
+    const e = await estado(cobranca);
+    expect(e.financeiro.status).toBe("pendente");
+    expect(e.caixa).toHaveLength(0);
+  });
+
+  it("refuses a bill that is already paid (409) without a second cash entry", async () => {
+    expect((await baixa({ payment_id: cobranca, valor_pago: "150.00" })).statusCode).toBe(201);
+    const repetida = await baixa({ payment_id: cobranca, valor_pago: "150.00" });
+    expect(repetida.statusCode).toBe(409);
+    expect(repetida.json().error.code).toBe("MENSALIDADE_JA_PAGA");
+    // paga pela rota antiga também conta
+    const outra = (
+      await one(
+        db,
+        "INSERT INTO financeiro(user_id, valor, data_vencimento) VALUES ($1, '150.00', fn_hoje_sp() + 40) RETURNING payment_id",
+        [aluno],
+      )
+    ).payment_id;
+    expect(
+      (await request("PATCH", `/mensalidades/${outra}/pagar`, { metodo_pagamento: "pix" }))
+        .statusCode,
+    ).toBe(200);
+    expect((await baixa({ payment_id: outra, valor_pago: "150.00" })).statusCode).toBe(409);
+    expect((await estado(cobranca)).caixa).toHaveLength(1);
+    expect((await estado(outra)).caixa).toHaveLength(1);
+  });
+
+  it("lets only one of two simultaneous clicks through", async () => {
+    const [a, b] = await Promise.all([
+      baixa({ payment_id: cobranca, valor_pago: "150.00" }),
+      baixa({ payment_id: cobranca, valor_pago: "150.00" }),
+    ]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([201, 409]);
+    expect((await estado(cobranca)).caixa).toHaveLength(1);
+  });
+
+  it("rolls back the bill update when the cash entry fails (atomicity)", async () => {
+    await db.query(`CREATE FUNCTION falha_caixa() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'falha simulada no caixa'; END $$`);
+    await db.query(
+      "CREATE TRIGGER tg_falha_caixa BEFORE INSERT ON cash_flow FOR EACH ROW EXECUTE FUNCTION falha_caixa()",
+    );
+    try {
+      expect((await baixa({ payment_id: cobranca, valor_pago: "150.00" })).statusCode).toBe(500);
+    } finally {
+      await db.query("DROP TRIGGER tg_falha_caixa ON cash_flow");
+      await db.query("DROP FUNCTION falha_caixa()");
+    }
+    const e = await estado(cobranca);
+    expect(e.financeiro).toMatchObject({
+      status: "pendente",
+      data_pagamento: null,
+      metodo_pagamento: null,
+    });
+    expect(e.caixa).toHaveLength(0);
+    // sem a falha, a mesma baixa passa
+    expect((await baixa({ payment_id: cobranca, valor_pago: "150.00" })).statusCode).toBe(201);
+  });
+
+  it("validates the payload", async () => {
+    for (const body of [
+      {},
+      { payment_id: cobranca },
+      { payment_id: cobranca, valor_pago: "0.00" },
+      { payment_id: cobranca, valor_pago: "150" },
+      { payment_id: cobranca, valor_pago: 150 },
+      { payment_id: cobranca, valor_pago: "-1.00" },
+      { payment_id: "nao-e-uuid", valor_pago: "150.00" },
+      { payment_id: cobranca, valor_pago: "150.00", metodo_pagamento: "cheque" },
+      { payment_id: cobranca, valor_pago: "150.00", extra: 1 },
+    ])
+      expect((await baixa(body)).statusCode, JSON.stringify(body)).toBe(400);
+    expect((await baixa({ payment_id: randomUUID(), valor_pago: "150.00" })).statusCode).toBe(404);
+    expect((await estado(cobranca)).caixa).toHaveLength(0);
   });
 });

@@ -321,6 +321,22 @@ export interface MensalidadePainelItem {
   cobranca_gerada: boolean;
   pago_em: ISOTimestamp | null;
   status: StatusMensalidadePainel;
+  /** Valor da cobrança do mês. Só vem para o gestor (admin); null sem cobrança. */
+  valor?: Decimal | null;
+}
+
+/** POST /financeiro/baixa (admin). */
+export interface BaixaMensalidadeInput {
+  payment_id: UUID;
+  /** Valor efetivamente recebido ("150.00"); pode diferir do cobrado. */
+  valor_pago: Decimal;
+  /** Padrão: pix. */
+  metodo_pagamento?: MetodoPagamento;
+}
+export interface BaixaMensalidade {
+  mensalidade: Financeiro;
+  lancamento: CashFlow;
+  status_aluno: UserStatus;
 }
 
 export interface PainelMensalidades extends Paginated<MensalidadePainelItem> {

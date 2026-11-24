@@ -178,9 +178,12 @@ export function Finance() {
   const [student, setStudent] = useState("");
   const [selected, setSelected] = useState<Financeiro>();
   const [revision, setRevision] = useState(0);
+  // Baixas feitas no painel atualizam resumo e cobranças, mas não recarregam
+  // o próprio painel (ele já mostrou o cartão verde pelo estado local).
+  const [baixas, setBaixas] = useState(0);
   const r = useResource<Paginated<Financeiro & { nome: string }>>(
     `/mensalidades?page=${page}${status ? `&status=${status}` : ""}`,
-    revision,
+    revision + baixas,
   );
   const current = today().slice(0, 7);
   const summary = useResource<{
@@ -189,7 +192,7 @@ export function Finance() {
     em_aberto: string;
     atrasado: string;
     taxa_inadimplencia: string;
-  }>(`/financeiro/resumo?competencia=${current}`, revision);
+  }>(`/financeiro/resumo?competencia=${current}`, revision + baixas);
   function reload() {
     setRevision((v) => v + 1);
     setSelected(undefined);
@@ -215,7 +218,14 @@ export function Finance() {
           </div>
         )}
       </Card>
-      <PainelMensalidades tick={revision} />
+      <PainelMensalidades
+        tick={revision}
+        podeDarBaixa
+        onBaixa={() => {
+          setBaixas((v) => v + 1);
+          setSelected(undefined);
+        }}
+      />
       <Card
         title="Cobranças"
         action={

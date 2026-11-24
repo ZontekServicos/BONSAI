@@ -29,13 +29,14 @@ import {
  *   pendente → não existe (inclusive quando a cobrança do mês nem foi gerada).
  * A competência vem do VENCIMENTO, não da data do lançamento: quitar em
  * novembro a mensalidade atrasada de outubro não torna novembro "pago".
- * Não expõe valores: o professor enxerga status e vencimento, nada mais.
+ * Valores: só o gestor recebe `valor` (da cobrança do mês, para a baixa
+ * rápida). O professor enxerga status e vencimento, nada mais.
  */
 const PAINEL_SQL = `
   WITH ref AS (SELECT date_trunc('month', fn_hoje_sp())::date AS ini),
   alunos AS (
     SELECT u.id AS user_id, u.nome, u.status AS status_aluno, p.modalidade,
-           cob.payment_id,
+           cob.payment_id, cob.valor,
            coalesce(cob.data_vencimento,
              -- sem cobrança gerada: vencimento previsto pelo dia padrão de cobrança
              (ref.ini + (least($1::int, extract(day FROM ref.ini + interval '1 month - 1 day')::int) - 1))
@@ -47,7 +48,7 @@ const PAINEL_SQL = `
       JOIN aluno_profile p ON p.user_id = u.id
       CROSS JOIN ref
       LEFT JOIN LATERAL (
-        SELECT f.payment_id, f.data_vencimento FROM financeiro f
+        SELECT f.payment_id, f.data_vencimento, f.valor FROM financeiro f
          WHERE f.user_id = u.id
            AND f.data_vencimento >= ref.ini AND f.data_vencimento < ref.ini + interval '1 month'
          ORDER BY f.data_vencimento, f.payment_id LIMIT 1
@@ -139,6 +140,60 @@ async function paymentLock(db: DB, id: string) {
   const p = found(await one(db, "SELECT user_id FROM financeiro WHERE payment_id=$1", [id]));
   await db.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [p.user_id]);
   return found(await one(db, "SELECT * FROM financeiro WHERE payment_id=$1 FOR UPDATE", [id]));
+}
+/**
+ * Quita uma cobrança: marca `financeiro` como paga E lança a entrada
+ * 'mensalidade' no cash_flow. Deve rodar DENTRO de db.transaction: as duas
+ * escritas confirmam juntas ou nenhuma confirma.
+ *
+ * Duplicidade: o lock (aluno → cobrança, FOR UPDATE) serializa baixas
+ * simultâneas; a segunda encontra a cobrança já paga e recebe 409. Por baixo
+ * disso, cash_flow.payment_id é UNIQUE no banco.
+ *
+ * `valor_recebido`: o que entrou no caixa. Se omitido, é o valor da cobrança.
+ * O valor cobrado em `financeiro` não muda (fica o histórico do que foi cobrado).
+ */
+async function quitar(
+  tx: DB,
+  config: Config,
+  b: {
+    payment_id: string;
+    metodo_pagamento: z.infer<typeof method>;
+    data_pagamento?: string;
+    valor_recebido?: string;
+    registrado_por: string;
+  },
+) {
+  const old = await paymentLock(tx, b.payment_id);
+  if (old.status === "pago") fail(409, "MENSALIDADE_JA_PAGA", "Mensalidade já paga.");
+  // Defesa extra: cobrança "em aberto" que já tem entrada no caixa (não deveria
+  // existir) também não recebe um segundo lançamento.
+  if (await one(tx, "SELECT 1 FROM cash_flow WHERE payment_id=$1", [b.payment_id]))
+    fail(409, "MENSALIDADE_JA_PAGA", "Esta cobrança já tem entrada no caixa.");
+  const valid = await one(tx, "SELECT coalesce($1::date,fn_hoje_sp())<=fn_hoje_sp() AS ok", [
+    b.data_pagamento ?? null,
+  ]);
+  if (!valid.ok) fail(400, "VALIDATION_ERROR", "Pagamento não pode ter data futura.");
+  const mensalidade = await one(
+    tx,
+    `UPDATE financeiro SET status='pago',data_pagamento=coalesce($2::date,fn_hoje_sp()),metodo_pagamento=$3
+      WHERE payment_id=$1 AND status<>'pago' RETURNING *`,
+    [b.payment_id, b.data_pagamento ?? null, b.metodo_pagamento],
+  );
+  // `valor` de numeric(10,2) chega como string "150.00"; o schema da rota
+  // garante o mesmo formato para valor_recebido, então a comparação é exata.
+  const valor: string = b.valor_recebido ?? mensalidade.valor;
+  const motivo =
+    `Mensalidade ${b.payment_id}` +
+    (valor !== mensalidade.valor ? ` (cobrado ${mensalidade.valor})` : "");
+  const lancamento = await one(
+    tx,
+    `INSERT INTO cash_flow(tipo,valor,motivo,categoria,payment_id,registrado_por)
+      VALUES('entrada',$1,$2,'mensalidade',$3,$4) RETURNING *`,
+    [valor, motivo, b.payment_id, b.registrado_por],
+  );
+  const s = await situation(tx, old.user_id, config);
+  return { mensalidade, lancamento, status_aluno: s.status };
 }
 export function billingRoutes(app: FastifyInstance, ctx: Context) {
   const { db, config } = ctx;
@@ -243,28 +298,36 @@ export function billingRoutes(app: FastifyInstance, ctx: Context) {
       body: z.strictObject({ metodo_pagamento: method, data_pagamento: date.optional() }),
     },
     async (r, _s, b, _q, p) =>
-      db.transaction(async (tx) => {
-        const old = await paymentLock(tx, p.payment_id);
-        if (old.status === "pago") fail(409, "MENSALIDADE_JA_PAGA", "Mensalidade já paga.");
-        const valid = await one(tx, "SELECT coalesce($1::date,fn_hoje_sp())<=fn_hoje_sp() AS ok", [
-          b.data_pagamento ?? null,
-        ]);
-        if (!valid.ok) fail(400, "VALIDATION_ERROR", "Pagamento não pode ter data futura.");
-        const mensalidade = await one(
-          tx,
-          `UPDATE financeiro SET status='pago',data_pagamento=coalesce($2::date,fn_hoje_sp()),metodo_pagamento=$3
-      WHERE payment_id=$1 AND status<>'pago' RETURNING *`,
-          [p.payment_id, b.data_pagamento ?? null, b.metodo_pagamento],
-        );
-        const lancamento = await one(
-          tx,
-          `INSERT INTO cash_flow(tipo,valor,motivo,categoria,payment_id,registrado_por)
-      VALUES('entrada',$1,'Mensalidade '||$2::text,'mensalidade',$2::uuid,$3) RETURNING *`,
-          [mensalidade.valor, p.payment_id, r.account.id],
-        );
-        const s = await situation(tx, old.user_id, config);
-        return { mensalidade, lancamento, status_aluno: s.status };
+      db.transaction((tx) =>
+        quitar(tx, config, { ...b, payment_id: p.payment_id, registrado_por: r.account.id }),
+      ),
+  );
+  // Baixa rápida (painel de mensalidades): só o gestor. Mesma transação de
+  // PATCH /mensalidades/:id/pagar, com o valor efetivamente recebido.
+  route(
+    app,
+    ctx,
+    "POST",
+    "/financeiro/baixa",
+    {
+      role: "admin",
+      body: z.strictObject({
+        payment_id: uuid,
+        valor_pago: positiveMoney,
+        metodo_pagamento: method.default("pix"),
       }),
+    },
+    async (r, reply, b) =>
+      reply.code(201).send(
+        await db.transaction((tx) =>
+          quitar(tx, config, {
+            payment_id: b.payment_id,
+            metodo_pagamento: b.metodo_pagamento,
+            valor_recebido: b.valor_pago,
+            registrado_por: r.account.id,
+          }),
+        ),
+      ),
   );
   route(
     app,
@@ -307,12 +370,15 @@ export function billingRoutes(app: FastifyInstance, ctx: Context) {
     async (_r, _s, _b, q) =>
       one(
         db,
-        `SELECT coalesce(sum(valor),0)::numeric(12,2) AS previsto,
-    coalesce(sum(valor) FILTER(WHERE status='pago'),0)::numeric(12,2) AS recebido,
-    coalesce(sum(valor) FILTER(WHERE status<>'pago'),0)::numeric(12,2) AS em_aberto,
-    coalesce(sum(valor) FILTER(WHERE status<>'pago' AND data_vencimento<fn_hoje_sp()),0)::numeric(12,2) AS atrasado,
-    coalesce(round(100.0*count(*) FILTER(WHERE status<>'pago' AND data_vencimento<fn_hoje_sp())/nullif(count(*),0),2),0)::text AS taxa_inadimplencia
-    FROM financeiro WHERE data_vencimento >= $1::date AND data_vencimento < $1::date+interval '1 month'`,
+        // recebido = o que entrou no caixa (a baixa rápida pode receber valor
+        // diferente do cobrado); cash_flow.payment_id é UNIQUE, o JOIN não duplica.
+        `SELECT coalesce(sum(f.valor),0)::numeric(12,2) AS previsto,
+    coalesce(sum(coalesce(c.valor,f.valor)) FILTER(WHERE f.status='pago'),0)::numeric(12,2) AS recebido,
+    coalesce(sum(f.valor) FILTER(WHERE f.status<>'pago'),0)::numeric(12,2) AS em_aberto,
+    coalesce(sum(f.valor) FILTER(WHERE f.status<>'pago' AND f.data_vencimento<fn_hoje_sp()),0)::numeric(12,2) AS atrasado,
+    coalesce(round(100.0*count(*) FILTER(WHERE f.status<>'pago' AND f.data_vencimento<fn_hoje_sp())/nullif(count(*),0),2),0)::text AS taxa_inadimplencia
+    FROM financeiro f LEFT JOIN cash_flow c ON c.payment_id=f.payment_id
+    WHERE f.data_vencimento >= $1::date AND f.data_vencimento < $1::date+interval '1 month'`,
         [`${q.competencia}-01`],
       ),
   );
@@ -334,13 +400,13 @@ export function billingRoutes(app: FastifyInstance, ctx: Context) {
         q: text().optional(),
       }),
     },
-    async (_r, _s, _b, q) => {
+    async (r, _s, _b, q) => {
       const lista = await paginate(
         db,
         `${PAINEL_SQL}
          SELECT user_id, nome, status_aluno, modalidade, payment_id,
                 to_char(data_vencimento, 'YYYY-MM-DD') AS data_vencimento,
-                cobranca_gerada, pago_em, status
+                cobranca_gerada, pago_em, status, valor
            FROM alunos
           WHERE ($2::text IS NULL OR status = $2)
             AND ($3::text IS NULL OR nome ILIKE '%'||$3||'%')
@@ -360,7 +426,12 @@ export function billingRoutes(app: FastifyInstance, ctx: Context) {
         [config.BILLING_DUE_DAY, q.q ?? null],
       );
       const { competencia, ...contagem } = resumo;
-      return { ...lista, competencia, resumo: contagem };
+      // Valor só para o gestor; para o professor o campo nem aparece.
+      const data =
+        r.account.role === "admin"
+          ? lista.data
+          : lista.data.map(({ valor: _valor, ...item }: Record<string, unknown>) => item);
+      return { ...lista, data, competencia, resumo: contagem };
     },
   );
 }
