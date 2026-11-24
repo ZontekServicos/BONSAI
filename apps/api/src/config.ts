@@ -30,6 +30,17 @@ const envSchema = z
       .transform((v) => v.replace(/\D/g, ""))
       .pipe(z.string().regex(/^[1-9]\d{9,14}$/, "WHATSAPP_LOJA: use DDI + DDD + número"))
       .optional(),
+    /**
+     * Chave Pix da academia, enviada nas mensagens de cobrança (CPF, CNPJ,
+     * e-mail, telefone ou chave aleatória). Sem ela, /notificacoes/cobrar → 503.
+     */
+    PIX_CHAVE: z
+      .string()
+      .trim()
+      .min(1)
+      .max(77, "PIX_CHAVE: no máximo 77 caracteres")
+      .refine((v) => !/[\r\n]/.test(v), "PIX_CHAVE: uma linha só")
+      .optional(),
   })
   .refine((v) => v.JWT_ACCESS_SECRET !== v.JWT_QR_SECRET, "JWT secrets must differ")
   .refine(

@@ -113,7 +113,7 @@ Funções: `fn_hoje_sp`, `fn_pendencias_bloqueantes`, `fn_sincronizar_status_alu
 
 Convenções: dinheiro em `NUMERIC`, trafega como **string** no JSON; datas `YYYY-MM-DD`; timestamps ISO com fuso; nada financeiro é apagado fisicamente.
 
-## 6. API — `/api/v1` (71 rotas)
+## 6. API — `/api/v1` (72 rotas)
 
 Papel: `public` = sem login · `qualquer` = qualquer autenticado (com `staffOrSelf`/`selfOrAdmin` quando há `:id`) · `STAFF` = `admin` + `professor` · `admin` · `aluno`.
 
@@ -140,6 +140,7 @@ Papel: `public` = sem login · `qualquer` = qualquer autenticado (com `staffOrSe
 | carteirinha   | `POST /carteirinha/validar`                                                                                                                                                                                  | STAFF                          |
 | presença      | `POST /presencas/check-in` · `PATCH /presencas/:attendance_id/check-out` · `PATCH /presencas/check-out` · `GET /presencas` · `/presencas/ativas` · `/presencas/estatisticas` · `GET /presencas/stream` (SSE) | STAFF                          |
 | financeiro    | `GET/POST /mensalidades` · `POST /mensalidades/lote` · `PATCH/DELETE /mensalidades/:payment_id` · `PATCH /mensalidades/:payment_id/pagar` · `POST /financeiro/baixa` (baixa rápida: `{payment_id, valor_pago, metodo_pagamento?=pix}` → uma transação marca a cobrança paga e lança a entrada no `cash_flow` com o valor recebido; 409 se já paga) · `GET /financeiro/inadimplentes` · `/financeiro/resumo` (`recebido` = valor no caixa)           | admin                          |
+| notificacoes  | `POST /notificacoes/cobrar` `{payment_id}` → `{destinatario, mensagem, whatsapp_url, ...}`: link wa.me pré-preenchido com aluno, competência por extenso, valor e `PIX_CHAVE`; **menor de 18 (SP) → sempre o responsável**; maior → o aluno (sem número: responsável; sem nenhum: 422 `SEM_WHATSAPP`); 409 se paga; não grava nada | admin                          |
 | loja          | `GET /produtos` · `GET /produtos/:id`                                                                                                                                                                        | qualquer                       |
 | loja          | `POST /produtos` · `PATCH/DELETE /produtos/:id` · `PATCH /produtos/:id/estoque` · `POST/GET /vendas` · `GET /vendas/:sale_id`                                                                                | admin                          |
 | caixa         | `GET/POST /caixa/lancamentos` · `POST /caixa/sangrias` · `GET /caixa/balanco` · `/caixa/balanco/periodo`                                                                                                     | admin                          |
@@ -218,6 +219,7 @@ Fonte display: Barlow Condensed (títulos itálicos extra-bold); corpo: Archivo.
 | `DIAS_CARENCIA` (5)                                                          | —           | carência antes do bloqueio                                          |
 | `BILLING_ENABLED` (false), `BILLING_AMOUNT` (150.00), `BILLING_DUE_DAY` (10) | —           | geração automática de mensalidades                                  |
 | `WHATSAPP_LOJA` (sem padrão) | — | número da loja (DDI+DDD+número) para o "Solicitar Compra"; sem ele o pedido responde 503 |
+| `PIX_CHAVE` (sem padrão) | — | chave Pix da academia (até 77 caracteres, uma linha) usada na mensagem de cobrança; sem ela `/notificacoes/cobrar` responde 503 |
 | `VITE_API_URL`                                                               | —           | só para front hospedado separadamente                               |
 | `VITE_DEMO_LOGIN`                                                            | —           | só desenvolvimento                                                  |
 
@@ -261,7 +263,8 @@ Cada execução cria um schema aleatório dentro de `bonsai_test` e apaga só es
 ## 12. Qualidade e CI
 
 - **`.github/workflows/ci.yml`** (push e PR): Postgres 18 → `pnpm install --frozen-lockfile` → `lint:colors` → `build` → `test` → `pnpm audit --prod --audit-level=high`.
-- **Último resultado local (24/11):** typecheck ok, builds ok, `lint:colors` ok, **66/66 testes** em 3 rodadas seguidas (inclui 7 da baixa rápida: transação caixa + cobrança, valor ajustado, RBAC, 409 em cobrança paga, cliques simultâneos, rollback com falha simulada no caixa, validação); baixa percorrida no Chrome headless (390px e 320px, gestor e professor).
+- **Último resultado local (24/11, cobrança WhatsApp):** typecheck ok, builds ok, `lint:colors` ok, **72/72 testes** em 3 rodadas (inclui 6 de `/notificacoes/cobrar`: mensagem e wa.me exatos, menor → responsável mesmo com WhatsApp próprio, 18º aniversário em SP, fallback/422, RBAC/409/404/400, 503 sem Pix); cobrança em massa percorrida no Chrome headless (390px/320px, gestor e professor).
+- **Resultado anterior (24/11, baixa rápida):** typecheck ok, builds ok, `lint:colors` ok, **66/66 testes** em 3 rodadas seguidas (inclui 7 da baixa rápida: transação caixa + cobrança, valor ajustado, RBAC, 409 em cobrança paga, cliques simultâneos, rollback com falha simulada no caixa, validação); baixa percorrida no Chrome headless (390px e 320px, gestor e professor).
 - **Resultado anterior (23/11, cluster Postgres 18 recém-criado):** typecheck ok, builds ok, `lint:colors` ok, **59/59 testes em 26 s** (inclui os 3 do painel de mensalidades); painel medido em 320px no Chrome headless sem rolagem horizontal da página.
 - **Resultado anterior (19/11):** typecheck ok, builds ok, **56/56 testes** (perfil: medidas estritas, foto com assinatura/tipo/tamanho, troca e remoção; checksums 0001–0007, upgrade 0005→0006, convites: hash do token, expiração, revogação, uso único concorrente, rollback), credenciais demo ausentes do bundle; upgrade real validado (0005→0006 e 0006→0007 com `migrate.ts`); fluxo de convite percorrido no Chrome headless (mobile e desktop).
 - **Cobertura dos testes:** JWT (expirado/forjado/contexto/algoritmo), RBAC/IDOR, origem e headers, rotação/replay/corrida de refresh, revogação, carência e bloqueio da carteirinha, check-in concorrente, pagamento duplo, caixa imutável, mensalidades idempotentes (inclusive 29/02), venda concorrente do último item, idempotência de venda, rollback de carrinho, SSE via LISTEN, path traversal no static, relatórios.

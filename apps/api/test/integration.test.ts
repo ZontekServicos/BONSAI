@@ -98,6 +98,7 @@ beforeAll(async () => {
     JWT_QR_SECRET: "q".repeat(40),
     CORS_ORIGIN: origin,
     WHATSAPP_LOJA: "+55 (11) 99999-0000",
+    PIX_CHAVE: "financeiro@academia.test",
     NODE_ENV: "test",
   });
   db = createDatabase(config);
@@ -2219,5 +2220,222 @@ describe("quick payment (POST /financeiro/baixa)", () => {
       expect((await baixa(body)).statusCode, JSON.stringify(body)).toBe(400);
     expect((await baixa({ payment_id: randomUUID(), valor_pago: "150.00" })).statusCode).toBe(404);
     expect((await estado(cobranca)).caixa).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cobrança por WhatsApp: POST /notificacoes/cobrar (só gestor)
+// Menor de idade → responsável; maior → o próprio aluno. Devolve mensagem + wa.me.
+// ---------------------------------------------------------------------------
+describe("billing reminders via WhatsApp (POST /notificacoes/cobrar)", () => {
+  const PIX = "financeiro@academia.test";
+  const cobrar = (body: Record<string, unknown>, token = adminToken) =>
+    request("POST", "/notificacoes/cobrar", body, token);
+  /** Oráculo independente da API: competência por extenso via ICU do Node. */
+  const porExtenso = (competencia: string) =>
+    new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(
+      new Date(`${competencia}-15T12:00:00Z`),
+    );
+  const competencia = () => todaySP().slice(0, 7);
+  async function aluno(o: {
+    nome: string;
+    email: string;
+    nascimento?: string;
+    whatsapp?: string | null;
+    responsavel?: { nome: string; whatsapp: string };
+  }) {
+    const id = await user(o.email);
+    let responsavel: string | null = null;
+    if (o.responsavel)
+      responsavel = (
+        await one(
+          db,
+          `INSERT INTO responsaveis(nome, parentesco, whatsapp, telefone_emergencia)
+           VALUES ($1, 'pai', $2, '5511900009999') RETURNING id`,
+          [o.responsavel.nome, o.responsavel.whatsapp],
+        )
+      ).id;
+    await db.query("UPDATE users SET nome=$2 WHERE id=$1", [id, o.nome]);
+    await db.query(
+      "UPDATE aluno_profile SET data_nascimento=$2, whatsapp=$3, responsavel_id=$4 WHERE user_id=$1",
+      [id, o.nascimento ?? null, o.whatsapp ?? null, responsavel],
+    );
+    return id;
+  }
+  const cobranca = async (user_id: string, valor = "180.00") =>
+    (
+      await one(
+        db,
+        `INSERT INTO financeiro(user_id, valor, data_vencimento)
+         VALUES ($1, $2, date_trunc('month', fn_hoje_sp())::date + 9) RETURNING payment_id`,
+        [user_id, valor],
+      )
+    ).payment_id as string;
+
+  it("sends adults' reminders to the student, with the exact message and wa.me link", async () => {
+    const id = await aluno({
+      nome: "Ana Adulta Souza",
+      email: "ana.adulta@cobrar.test",
+      nascimento: "1990-05-01",
+      whatsapp: "5511911110000",
+    });
+    const payment_id = await cobranca(id);
+    const res = await cobrar({ payment_id });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const mensagem =
+      `Olá, Ana! Notamos que a mensalidade de Ana Adulta Souza referente a ${porExtenso(competencia())} ` +
+      `ainda está pendente. Valor: R$ 180,00. Segue a chave Pix: ${PIX}`;
+    expect(body).toMatchObject({
+      payment_id,
+      user_id: id,
+      aluno_nome: "Ana Adulta Souza",
+      menor_de_idade: false,
+      competencia: competencia(),
+      valor: "180.00",
+      destinatario: { tipo: "aluno", nome: "Ana Adulta Souza", whatsapp: "5511911110000" },
+      mensagem,
+    });
+    expect(body.whatsapp_url).toBe(
+      `https://wa.me/5511911110000?text=${encodeURIComponent(mensagem)}`,
+    );
+    const link = new URL(body.whatsapp_url);
+    expect([link.protocol, link.hostname, link.pathname]).toEqual([
+      "https:",
+      "wa.me",
+      "/5511911110000",
+    ]);
+    expect(link.searchParams.get("text")).toBe(mensagem);
+    // só gera o link: a cobrança continua pendente e nada entra no caixa
+    expect(
+      (await one(db, "SELECT status FROM financeiro WHERE payment_id=$1", [payment_id])).status,
+    ).toBe("pendente");
+    expect(
+      (await db.query("SELECT 1 FROM cash_flow WHERE payment_id=$1", [payment_id])).rowCount,
+    ).toBe(0);
+  });
+
+  it("sends minors' reminders to the guardian even when the minor has a WhatsApp", async () => {
+    const id = await aluno({
+      nome: "Lucas Menor Lima",
+      email: "lucas.menor@cobrar.test",
+      nascimento: shift(todaySP(), -10),
+      whatsapp: "5511933330000", // o próprio menor tem número: NÃO deve ser usado
+      responsavel: { nome: "Marcos Lima", whatsapp: "5511922220000" },
+    });
+    const payment_id = await cobranca(id, "1234.50");
+    const body = (await cobrar({ payment_id })).json();
+    expect(body.menor_de_idade).toBe(true);
+    expect(body.destinatario).toEqual({
+      tipo: "responsavel",
+      nome: "Marcos Lima",
+      whatsapp: "5511922220000",
+    });
+    expect(body.mensagem).toBe(
+      `Olá, Marcos! Notamos que a mensalidade de Lucas Menor Lima referente a ${porExtenso(competencia())} ` +
+        `ainda está pendente. Valor: R$ 1.234,50. Segue a chave Pix: ${PIX}`,
+    );
+    expect(new URL(body.whatsapp_url).pathname).toBe("/5511922220000");
+    expect(body.whatsapp_url).not.toContain("5511933330000");
+  });
+
+  it("uses the 18th birthday in America/Sao_Paulo as the adult boundary", async () => {
+    const responsavel = { nome: "Rita Borda", whatsapp: "5511944440000" };
+    const faz18Hoje = await aluno({
+      nome: "Bia Dezoito",
+      email: "bia.18@cobrar.test",
+      nascimento: shift(todaySP(), -18),
+      whatsapp: "5511955550000",
+      responsavel,
+    });
+    const faz18Amanha = await aluno({
+      nome: "Caio Quase",
+      email: "caio.17@cobrar.test",
+      nascimento: shift(todaySP(), -18, 1),
+      whatsapp: "5511966660000",
+      responsavel: { ...responsavel, whatsapp: "5511977770000" },
+    });
+    const adulto = (await cobrar({ payment_id: await cobranca(faz18Hoje) })).json();
+    expect(adulto).toMatchObject({
+      menor_de_idade: false,
+      destinatario: { tipo: "aluno", whatsapp: "5511955550000" },
+    });
+    const menor = (await cobrar({ payment_id: await cobranca(faz18Amanha) })).json();
+    expect(menor).toMatchObject({
+      menor_de_idade: true,
+      destinatario: { tipo: "responsavel", whatsapp: "5511977770000" },
+    });
+  });
+
+  it("falls back to the guardian for adults without WhatsApp and refuses when there is no number", async () => {
+    const comResp = await aluno({
+      nome: "Davi Sem Numero",
+      email: "davi@cobrar.test",
+      nascimento: "1995-01-01",
+      responsavel: { nome: "Helena Costa", whatsapp: "5511988880000" },
+    });
+    expect((await cobrar({ payment_id: await cobranca(comResp) })).json().destinatario).toEqual({
+      tipo: "responsavel",
+      nome: "Helena Costa",
+      whatsapp: "5511988880000",
+    });
+    // cadastro antigo: sem nascimento, sem WhatsApp, sem responsável
+    const semNada = await aluno({ nome: "Eva Antiga", email: "eva@cobrar.test" });
+    const res = await cobrar({ payment_id: await cobranca(semNada) });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toMatchObject({ code: "SEM_WHATSAPP" });
+    expect(res.json().error.message).toContain("Eva Antiga");
+  });
+
+  it("is admin-only, refuses paid or unknown bills and validates the payload", async () => {
+    const id = await aluno({
+      nome: "Fabio Rbac",
+      email: "fabio@cobrar.test",
+      nascimento: "1990-01-01",
+      whatsapp: "5511912340000",
+    });
+    const payment_id = await cobranca(id);
+    await user("prof.cobrar@example.test", "professor");
+    const professorToken = (
+      await request("POST", "/auth/login", { email: "prof.cobrar@example.test", password }, "")
+    ).json().access_token;
+    expect((await cobrar({ payment_id }, professorToken)).statusCode).toBe(403);
+    expect((await cobrar({ payment_id }, studentToken)).statusCode).toBe(403);
+    expect((await cobrar({ payment_id }, "")).statusCode).toBe(401);
+    for (const body of [{}, { payment_id: "x" }, { payment_id, extra: 1 }])
+      expect((await cobrar(body)).statusCode, JSON.stringify(body)).toBe(400);
+    expect((await cobrar({ payment_id: randomUUID() })).statusCode).toBe(404);
+    // depois da baixa não se cobra mais
+    expect(
+      (await request("POST", "/financeiro/baixa", { payment_id, valor_pago: "180.00" })).statusCode,
+    ).toBe(201);
+    const paga = await cobrar({ payment_id });
+    expect(paga.statusCode).toBe(409);
+    expect(paga.json().error.code).toBe("MENSALIDADE_JA_PAGA");
+  });
+
+  it("answers 503 when the academy Pix key is not configured", async () => {
+    const semPix = await buildApp({ ...config, PIX_CHAVE: undefined }, db, {
+      logger: false,
+      stream: false,
+    });
+    try {
+      const id = await aluno({
+        nome: "Gil Sem Pix",
+        email: "gil@cobrar.test",
+        nascimento: "1990-01-01",
+        whatsapp: "5511912349999",
+      });
+      const r = await semPix.inject({
+        method: "POST",
+        url: "/api/v1/notificacoes/cobrar",
+        headers: { origin, authorization: `Bearer ${adminToken}` },
+        payload: { payment_id: await cobranca(id) },
+      });
+      expect(r.statusCode).toBe(503);
+      expect(r.json().error.code).toBe("PIX_NAO_CONFIGURADO");
+    } finally {
+      await semPix.close();
+    }
   });
 });

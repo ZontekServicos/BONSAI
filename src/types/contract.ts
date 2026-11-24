@@ -333,6 +333,20 @@ export interface BaixaMensalidadeInput {
   /** Padrão: pix. */
   metodo_pagamento?: MetodoPagamento;
 }
+/** POST /notificacoes/cobrar (admin): mensagem de cobrança + link wa.me. */
+export interface CobrancaWhatsApp {
+  payment_id: UUID;
+  user_id: UUID;
+  aluno_nome: string;
+  menor_de_idade: boolean;
+  /** YYYY-MM do vencimento da cobrança. */
+  competencia: string;
+  valor: Decimal;
+  /** Menor de idade: sempre o responsável. */
+  destinatario: { tipo: "aluno" | "responsavel"; nome: string; whatsapp: string };
+  mensagem: string;
+  whatsapp_url: string;
+}
 export interface BaixaMensalidade {
   mensalidade: Financeiro;
   lancamento: CashFlow;

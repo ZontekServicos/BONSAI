@@ -221,6 +221,7 @@ export function Finance() {
       <PainelMensalidades
         tick={revision}
         podeDarBaixa
+        podeCobrar
         onBaixa={() => {
           setBaixas((v) => v + 1);
           setSelected(undefined);

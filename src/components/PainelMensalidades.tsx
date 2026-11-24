@@ -10,12 +10,30 @@
  * verde na hora (estado local), sem recarregar a lista: o aluno continua
  * visível na aba em que a baixa foi feita até a próxima troca de aba/busca.
  * O professor não recebe valores da API e não vê o botão.
+ *
+ * Cobrança por WhatsApp (só gestor, `podeCobrar`): checkbox nos pendentes +
+ * "Cobrar Selecionados" → POST /notificacoes/cobrar para cada um (a API escolhe
+ * o destinatário: responsável se o aluno for menor). As abas são abertas ainda
+ * dentro do clique; o navegador costuma liberar só uma janela por clique, então
+ * as demais ficam na "Fila de cobrança", cada uma com o próprio botão.
+ * Um item só conta como "aberto" quando window.open() devolve a janela; se
+ * vier null (pop-up bloqueado) ele continua na fila e aparece o aviso.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { CheckCircle2, CircleAlert, HandCoins, LoaderCircle, Search, X } from "lucide-react";
+import {
+  CheckCircle2,
+  CircleAlert,
+  ExternalLink,
+  HandCoins,
+  LoaderCircle,
+  MessageCircle,
+  Search,
+  X,
+} from "lucide-react";
 import type {
   BaixaMensalidade,
   BaixaMensalidadeInput,
+  CobrancaWhatsApp,
   MensalidadePainelItem,
   MetodoPagamento,
   PainelMensalidades as Painel,
@@ -33,6 +51,19 @@ const ABAS: { id: Aba; rotulo: string; chave: "todos" | StatusMensalidadePainel 
 
 /** Baixas feitas nesta tela, por payment_id (estado local até o próximo fetch). */
 type Baixas = Record<string, { pago_em: string; aba: Aba }>;
+
+/** Um item da fila de cobrança: link pronto (aberto ou não) ou erro da API. */
+type ItemFila = { payment_id: string; nome: string; aberto: boolean } & (
+  | { cobranca: CobrancaWhatsApp; erro?: undefined }
+  | { cobranca?: undefined; erro: string }
+);
+
+/** Abre o link numa aba nova sem dar acesso a esta página (noopener). */
+const abrirAba = () => {
+  const w = window.open("", "_blank");
+  if (w) w.opener = null;
+  return w;
+};
 
 const mesAno = (competencia?: string) => {
   if (!competencia) return "";
@@ -58,11 +89,14 @@ function Badge({ status }: { status: StatusMensalidadePainel }) {
 export function PainelMensalidades({
   tick = 0,
   podeDarBaixa = false,
+  podeCobrar = false,
   onBaixa,
 }: {
   tick?: number;
   /** Só o gestor: mostra "Dar baixa" (a API também exige admin). */
   podeDarBaixa?: boolean;
+  /** Só o gestor: checkboxes + "Cobrar Selecionados" (a API também exige admin). */
+  podeCobrar?: boolean;
   /** Avisa a tela de cima (resumo, cobranças) sem recarregar este painel. */
   onBaixa?: () => void;
 }) {
@@ -73,6 +107,12 @@ export function PainelMensalidades({
   const [baixas, setBaixas] = useState<Baixas>({});
   const [selecionado, setSelecionado] = useState<MensalidadePainelItem>();
   const [aviso, setAviso] = useState("");
+  /** Pendentes marcados para cobrança: payment_id → nome (vale entre páginas/abas). */
+  const [marcados, setMarcados] = useState<Record<string, string>>({});
+  const [cobrando, setCobrando] = useState(false);
+  const [fila, setFila] = useState<ItemFila[]>();
+  /** Último window.open() da fila voltou null (pop-up bloqueado). */
+  const [bloqueado, setBloqueado] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => {
       setBusca(q.trim());
@@ -111,6 +151,85 @@ export function PainelMensalidades({
     setPage(1);
     setAviso("");
   }
+
+  // Cobráveis = pendentes com cobrança gerada (sem payment_id não há o que cobrar).
+  const cobraveis = podeCobrar
+    ? itens.filter(
+        (i): i is typeof i & { payment_id: string } => i.status === "pendente" && !!i.payment_id,
+      )
+    : [];
+  const qtdMarcados = Object.keys(marcados).length;
+  const todosVisiveisMarcados =
+    cobraveis.length > 0 && cobraveis.every((i) => marcados[i.payment_id]);
+
+  function marcar(payment_id: string, nome: string, sim: boolean) {
+    setMarcados(({ [payment_id]: _, ...resto }) =>
+      sim ? { ...resto, [payment_id]: nome } : resto,
+    );
+  }
+  function marcarVisiveis(sim: boolean) {
+    setMarcados((m) => {
+      const novo = { ...m };
+      for (const i of cobraveis)
+        if (sim) novo[i.payment_id] = i.nome;
+        else delete novo[i.payment_id];
+      return novo;
+    });
+  }
+
+  async function cobrarSelecionados() {
+    const alvos = Object.entries(marcados);
+    if (!alvos.length || cobrando) return;
+    setCobrando(true);
+    setAviso("");
+    // Ainda dentro do clique: abre uma aba por aluno. O que o navegador
+    // bloquear vira null e o link fica na fila para abrir com um toque.
+    const abas = alvos.map(() => abrirAba());
+    const respostas = await Promise.allSettled(
+      alvos.map(([payment_id]) =>
+        api<CobrancaWhatsApp>("/notificacoes/cobrar", { method: "POST", body: { payment_id } }),
+      ),
+    );
+    const livres = abas.filter((w): w is Window => !!w);
+    const itensFila: ItemFila[] = respostas.map((res, n) => {
+      const [payment_id, nome] = alvos[n];
+      if (res.status === "rejected")
+        return { payment_id, nome, aberto: false, erro: errorMessage(res.reason) };
+      const aba = livres.shift();
+      if (aba) aba.location.href = res.value.whatsapp_url;
+      return { payment_id, nome, aberto: !!aba, cobranca: res.value };
+    });
+    for (const sobra of livres) sobra.close(); // abas sem link (falhas)
+    setFila(itensFila);
+    // Nenhuma aba abriu, nem a primeira: é bloqueio de pop-up, não o limite
+    // normal de uma janela por clique. Ninguém foi marcado como aberto.
+    setBloqueado(itensFila.some((i) => i.cobranca) && !itensFila.some((i) => i.aberto));
+    // Quem já tem link sai da seleção; quem falhou continua marcado.
+    setMarcados(
+      Object.fromEntries(itensFila.filter((i) => i.erro).map((i) => [i.payment_id, i.nome])),
+    );
+    setCobrando(false);
+  }
+
+  const marcarAberto = (payment_id: string) =>
+    setFila((f) => f?.map((i) => (i.payment_id === payment_id ? { ...i, aberto: true } : i)));
+  /**
+   * Única porta de abertura da fila. Só marca como aberto se o navegador
+   * entregou a janela; window.open() === null (pop-up bloqueado) deixa o item
+   * na fila e mostra o aviso para liberar pop-ups.
+   */
+  function abrirNaFila(item: ItemFila) {
+    if (!item.cobranca) return;
+    const w = abrirAba();
+    if (!w) {
+      setBloqueado(true);
+      return;
+    }
+    w.location.href = item.cobranca.whatsapp_url;
+    marcarAberto(item.payment_id);
+    setBloqueado(false);
+  }
+  const proximo = fila?.find((i) => i.cobranca && !i.aberto);
 
   return (
     <Card title={`Mensalidades · ${mesAno(r.data?.competencia)}`}>
@@ -161,6 +280,131 @@ export function PainelMensalidades({
         </label>
       </div>
 
+      {podeCobrar && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <label className="inline-flex min-h-11 cursor-pointer items-center gap-2.5 text-sm text-text-muted">
+            <input
+              type="checkbox"
+              checked={todosVisiveisMarcados}
+              disabled={!cobraveis.length}
+              onChange={(e) => marcarVisiveis(e.target.checked)}
+              // `!`: o CSS legado `.workspace-body input` daria padding ao checkbox
+              className="size-5! shrink-0 p-0! accent-primary"
+            />
+            Selecionar pendentes desta página
+          </label>
+          <button
+            type="button"
+            onClick={() => void cobrarSelecionados()}
+            disabled={!qtdMarcados || cobrando}
+            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-primary-strong px-5 text-sm font-bold text-text-main transition hover:brightness-110 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+          >
+            {cobrando ? (
+              <LoaderCircle size={18} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <MessageCircle size={18} aria-hidden="true" />
+            )}
+            Cobrar Selecionados{qtdMarcados ? ` (${qtdMarcados})` : ""}
+          </button>
+        </div>
+      )}
+
+      {fila && (
+        <section
+          aria-labelledby="fila-titulo"
+          className="mt-3 rounded-2xl border border-border-strong bg-surface-raised p-4"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p id="fila-titulo" className="font-bold text-text-main">
+                Fila de cobrança
+              </p>
+              <p role="status" className="mt-0.5 text-xs text-text-muted">
+                {fila.filter((i) => i.aberto).length} de {fila.filter((i) => i.cobranca).length}{" "}
+                aberta(s) no WhatsApp
+                {fila.some((i) => i.erro) && ` · ${fila.filter((i) => i.erro).length} com erro`}
+                {proximo && ". O navegador abre uma janela por clique: toque para abrir as demais."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setFila(undefined);
+                setBloqueado(false);
+              }}
+              aria-label="Fechar fila de cobrança"
+              className="grid size-10 shrink-0 place-items-center rounded-full text-text-muted transition hover:bg-surface hover:text-text-main"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          {bloqueado && (
+            <p
+              role="alert"
+              className="mt-3 rounded-xl border border-primary/60 bg-primary-strong/15 px-4 py-3 text-sm text-text-main"
+            >
+              O navegador bloqueou a janela do WhatsApp. Libere os pop-ups deste site (ícone na
+              barra de endereço) e toque de novo em “Abrir”. Nenhuma cobrança foi marcada como
+              aberta.
+            </p>
+          )}
+          {proximo?.cobranca && (
+            <button
+              type="button"
+              onClick={() => abrirNaFila(proximo)}
+              className="mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-success/20 px-4 text-sm font-bold text-success transition hover:bg-success/30 sm:w-auto"
+            >
+              <ExternalLink size={16} aria-hidden="true" /> Abrir próxima: {proximo.nome}
+            </button>
+          )}
+          <ul className="mt-3 grid gap-2">
+            {fila.map((i) => (
+              <li
+                key={i.payment_id}
+                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border pt-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-text-main">{i.nome}</p>
+                  {i.cobranca ? (
+                    <p className="text-xs text-text-muted">
+                      {i.cobranca.destinatario.tipo === "responsavel"
+                        ? `Para o responsável ${i.cobranca.destinatario.nome}${
+                            i.cobranca.menor_de_idade ? " (aluno menor de idade)" : ""
+                          }`
+                        : "Para o próprio aluno"}{" "}
+                      · {brl(i.cobranca.valor)}
+                    </p>
+                  ) : (
+                    <p role="alert" className="text-xs text-primary-soft">
+                      {i.erro}
+                    </p>
+                  )}
+                </div>
+                {i.cobranca && (
+                  // botão (não <a target=_blank>): só um window.open() diz se a janela abriu
+                  <button
+                    type="button"
+                    onClick={() => abrirNaFila(i)}
+                    aria-label={`${i.aberto ? "Abrir de novo" : "Abrir"} o WhatsApp de ${i.nome}`}
+                    className="inline-flex min-h-10 items-center gap-1.5 font-bold text-success underline-offset-4 hover:underline"
+                  >
+                    {i.aberto ? (
+                      <>
+                        <CheckCircle2 size={16} aria-hidden="true" /> Aberto · abrir de novo
+                      </>
+                    ) : (
+                      <>
+                        <ExternalLink size={16} aria-hidden="true" /> Abrir WhatsApp
+                      </>
+                    )}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <p
         role="status"
         aria-live="polite"
@@ -172,6 +416,7 @@ export function PainelMensalidades({
       <ul role="tabpanel" aria-busy={r.loading} className="mt-4 grid gap-2">
         {itens.map((i) => {
           const podeBaixar = podeDarBaixa && i.status === "pendente" && !!i.payment_id && !!i.valor;
+          const cobravel = podeCobrar && i.status === "pendente" && !!i.payment_id;
           return (
             <li
               key={i.user_id}
@@ -179,7 +424,20 @@ export function PainelMensalidades({
                 i.status === "pago" ? "border-l-success" : "border-l-primary"
               } ${i.recemPago ? "bg-success/10" : "bg-surface-raised"}`}
             >
-              <div className="min-w-0 flex-1">
+              {cobravel && (
+                // área de toque de 44px em volta do checkbox de 20px
+                <label className="-my-2 -ml-2 grid size-11 shrink-0 cursor-pointer place-items-center">
+                  <input
+                    type="checkbox"
+                    checked={!!marcados[i.payment_id!]}
+                    onChange={(e) => marcar(i.payment_id!, i.nome, e.target.checked)}
+                    aria-label={`Selecionar ${i.nome} para cobrança`}
+                    className="size-5! p-0! accent-primary"
+                  />
+                </label>
+              )}
+              {/* min-w-28: em telas estreitas (checkbox + selo) o selo desce de linha em vez de esmagar o nome */}
+              <div className="min-w-28 flex-1">
                 <p className="truncate font-semibold text-text-main">{i.nome}</p>
                 <p className="mt-0.5 text-xs text-text-muted">
                   Vence em {day(i.data_vencimento)}
@@ -235,6 +493,8 @@ export function PainelMensalidades({
               [res.mensalidade.payment_id]: { pago_em: res.lancamento.data, aba },
             }));
             setAviso(`Baixa registrada: ${selecionado.nome}, ${brl(res.lancamento.valor)}.`);
+            // pago não se cobra: sai da seleção
+            marcar(res.mensalidade.payment_id, selecionado.nome, false);
             setSelecionado(undefined);
             onBaixa?.();
           }}

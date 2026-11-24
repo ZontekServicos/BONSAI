@@ -18,6 +18,7 @@ import { cadastroRoutes } from "./modules/cadastro.js";
 import { convitesRoutes } from "./modules/convites.js";
 import { perfilRoutes } from "./modules/perfil.js";
 import { lojaRoutes } from "./modules/loja.js";
+import { notificacoesRoutes } from "./modules/notificacoes.js";
 import { FOTO_MAX_BYTES, FOTO_MIMES } from "../../../src/lib/imagem.js";
 import { presenceStream } from "./stream.js";
 
@@ -148,6 +149,7 @@ export async function buildApp(
   convitesRoutes(app, ctx);
   perfilRoutes(app, ctx);
   lojaRoutes(app, ctx);
+  notificacoesRoutes(app, ctx);
   if (options.stream !== false) presenceStream(app, ctx);
   if (config.SERVE_WEB) {
     await app.register(staticFiles, { root: resolve("dist"), prefix: "/", index: "index.html" });
