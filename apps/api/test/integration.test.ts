@@ -2439,3 +2439,108 @@ describe("billing reminders via WhatsApp (POST /notificacoes/cobrar)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Área do aluno espelha o painel do gestor: GET /me/mensalidades/atual usa a
+// mesma consulta do GET /financeiro/mensalidades; o histórico segue a regra
+// do caixa (pago só com entrada 'mensalidade' no cash_flow).
+// ---------------------------------------------------------------------------
+describe("student billing mirrors the admin panel", () => {
+  const CAMPOS = [
+    "user_id",
+    "payment_id",
+    "data_vencimento",
+    "cobranca_gerada",
+    "pago_em",
+    "status",
+    "valor",
+  ] as const;
+  const doAdmin = async (user_id: string) => {
+    const body = (await request("GET", "/financeiro/mensalidades?page_size=100")).json();
+    return body.data.find((i: { user_id: string }) => i.user_id === user_id);
+  };
+  const doAluno = async () => {
+    const res = await request("GET", "/me/mensalidades/atual", undefined, studentToken);
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  };
+  const pick = (o: Record<string, unknown>) => Object.fromEntries(CAMPOS.map((k) => [k, o[k]]));
+  const historico = async (query = "") =>
+    (await request("GET", `/me/mensalidades${query}`, undefined, studentToken)).json();
+  const cobrancaDoMes = async () =>
+    (
+      await request("POST", "/mensalidades", {
+        user_id: student,
+        valor: "150.00",
+        data_vencimento: `${todaySP().slice(0, 7)}-10`,
+      })
+    ).json().payment_id as string;
+
+  it("shows PENDENTE to the student when the month has no bill yet, exactly like the admin", async () => {
+    const aluno = await doAluno();
+    expect(aluno).toMatchObject({
+      competencia: todaySP().slice(0, 7),
+      status: "pendente",
+      cobranca_gerada: false,
+      payment_id: null,
+      valor: null,
+      data_vencimento: `${todaySP().slice(0, 7)}-10`,
+    });
+    expect(pick(aluno)).toEqual(pick(await doAdmin(student)));
+    // sem cobrança lançada o histórico continua vazio (o "mês atual" é que mostra a pendência)
+    expect(await historico()).toEqual([]);
+  });
+
+  it("stays in sync through bill creation and quick payment", async () => {
+    const payment_id = await cobrancaDoMes();
+    let aluno = await doAluno();
+    expect(aluno).toMatchObject({
+      status: "pendente",
+      cobranca_gerada: true,
+      payment_id,
+      valor: "150.00",
+    });
+    expect(pick(aluno)).toEqual(pick(await doAdmin(student)));
+
+    expect(
+      (await request("POST", "/financeiro/baixa", { payment_id, valor_pago: "150.00" })).statusCode,
+    ).toBe(201);
+    aluno = await doAluno();
+    expect(aluno.status).toBe("pago");
+    expect(aluno.pago_em).not.toBeNull();
+    expect(pick(aluno)).toEqual(pick(await doAdmin(student)));
+    const [linha] = await historico();
+    expect(linha).toMatchObject({ payment_id, status: "pago", data_pagamento: todaySP() });
+  });
+
+  it("does not show PAGO to the student without the cash entry (same rule as the admin)", async () => {
+    const payment_id = await cobrancaDoMes();
+    // marcada 'pago' direto no banco, sem lançamento no caixa
+    await db.query(
+      "UPDATE financeiro SET status='pago', data_pagamento=fn_hoje_sp(), metodo_pagamento='pix' WHERE payment_id=$1",
+      [payment_id],
+    );
+    expect((await doAdmin(student)).status).toBe("pendente");
+    expect((await doAluno()).status).toBe("pendente");
+    const [linha] = await historico();
+    expect(linha.status).not.toBe("pago");
+    expect(linha).toMatchObject({ data_pagamento: null, metodo_pagamento: null });
+    expect(await historico("?status=pago")).toEqual([]);
+    expect(
+      (await historico(`?status=${linha.status}`)).map((l: { payment_id: string }) => l.payment_id),
+    ).toEqual([payment_id]);
+  });
+
+  it("keeps the route student-only and the default amount admin-only", async () => {
+    expect((await request("GET", "/me/mensalidades/atual")).statusCode).toBe(403);
+    expect((await request("GET", "/me/mensalidades/atual", undefined, "")).statusCode).toBe(401);
+    expect((await request("GET", "/financeiro/mensalidades")).json().valor_padrao).toBe("150.00");
+    await user("prof.espelho@example.test", "professor");
+    const professorToken = (
+      await request("POST", "/auth/login", { email: "prof.espelho@example.test", password }, "")
+    ).json().access_token;
+    const prof = await request("GET", "/financeiro/mensalidades", undefined, professorToken);
+    expect(prof.statusCode).toBe(200);
+    expect(prof.json()).not.toHaveProperty("valor_padrao");
+  });
+});

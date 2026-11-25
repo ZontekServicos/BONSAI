@@ -428,10 +428,9 @@ function Painel() {
   // Tela fora do papel (ex.: "dashboard" após login de professor) cai na inicial.
   const current = allowed.includes(view) ? view : allowed[0];
   const nav = items.filter((i) => allowed.includes(i.id));
-  const title =
-    user.role === "aluno" && current === "dashboard"
-      ? "Minha jornada"
-      : items.find((i) => i.id === current)?.label;
+  // Home do aluno: sem título de página; o logo do Bonsai e a carteirinha logo abaixo.
+  const homeAluno = user.role === "aluno" && current === "dashboard";
+  const title = items.find((i) => i.id === current)?.label;
   return (
     <div className="app">
       <button
@@ -474,20 +473,33 @@ function Painel() {
         </div>
       </aside>
       <main className="page">
-        <header className="page-header">
+        <header
+          // `!`: .page-header (CSS legado fora de camada) já define margin-bottom
+          className={`page-header ${homeAluno ? "mb-5! min-[951px]:mb-0!" : ""}`}
+        >
           <div className="title-wrap">
             <button className="menu" onClick={() => setMenu(true)} aria-label="Abrir menu">
               <Menu />
             </button>
-            <Logo variant="icon" className="min-[951px]:hidden" />
-            <div>
-              <h1>{title}</h1>
-              <p>
-                {current === "loja"
-                  ? "Equipamentos e produtos da academia. Pedido direto pelo WhatsApp."
-                  : SUBTITLE[user.role]}
-              </p>
-            </div>
+            {homeAluno ? (
+              <>
+                {/* no desktop o logo já está na barra lateral */}
+                <Logo priority className="min-[951px]:hidden" />
+                <h1 className="sr-only">Minha carteirinha</h1>
+              </>
+            ) : (
+              <>
+                <Logo variant="icon" className="min-[951px]:hidden" />
+                <div>
+                  <h1>{title}</h1>
+                  <p>
+                    {current === "loja"
+                      ? "Equipamentos e produtos da academia. Pedido direto pelo WhatsApp."
+                      : SUBTITLE[user.role]}
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         </header>
         <Notice error={error} />

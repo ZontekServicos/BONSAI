@@ -358,6 +358,16 @@ export interface PainelMensalidades extends Paginated<MensalidadePainelItem> {
   competencia: string;
   /** Contagens para as abas (ignoram o filtro de status). */
   resumo: { todos: number; pago: number; pendente: number };
+  /** Só para o gestor: valor sugerido ao gerar a cobrança do mês (BILLING_AMOUNT). */
+  valor_padrao?: Decimal;
+}
+
+/**
+ * GET /me/mensalidades/atual (aluno): a mesma linha que o gestor vê no painel
+ * para este aluno, com a competência. null se o aluno estiver inativo.
+ */
+export interface MensalidadeAtual extends MensalidadePainelItem {
+  competencia: string;
 }
 
 export interface Carteirinha {

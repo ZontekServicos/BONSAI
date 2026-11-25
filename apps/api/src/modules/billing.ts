@@ -64,6 +64,29 @@ const PAINEL_SQL = `
      WHERE u.role = 'aluno' AND u.status <> 'inativo'
   )`;
 
+/** Colunas de um item do painel (as mesmas para o gestor e para o aluno). */
+const PAINEL_COLUNAS = `user_id, nome, status_aluno, modalidade, payment_id,
+       to_char(data_vencimento, 'YYYY-MM-DD') AS data_vencimento,
+       cobranca_gerada, pago_em, status, valor`;
+
+/**
+ * Situação do mês atual de UM aluno, com a MESMA consulta do painel do gestor
+ * (PAINEL_SQL): o aluno vê exatamente o status que o admin vê, inclusive
+ * "pendente" quando a cobrança do mês ainda não foi gerada. null se o aluno
+ * não entra no painel (inativo).
+ */
+export async function situacaoDoMes(db: DB, config: Config, user_id: string) {
+  return (
+    (await one(
+      db,
+      `${PAINEL_SQL}
+       SELECT to_char((SELECT ini FROM ref), 'YYYY-MM') AS competencia, ${PAINEL_COLUNAS}
+         FROM alunos WHERE user_id = $2`,
+      [config.BILLING_DUE_DAY, user_id],
+    )) ?? null
+  );
+}
+
 export async function situation(db: DB, id: string, config: Config) {
   const row = await one(db, "SELECT fn_sincronizar_status_aluno($1,$2) AS status", [
     id,
@@ -404,9 +427,7 @@ export function billingRoutes(app: FastifyInstance, ctx: Context) {
       const lista = await paginate(
         db,
         `${PAINEL_SQL}
-         SELECT user_id, nome, status_aluno, modalidade, payment_id,
-                to_char(data_vencimento, 'YYYY-MM-DD') AS data_vencimento,
-                cobranca_gerada, pago_em, status, valor
+         SELECT ${PAINEL_COLUNAS}
            FROM alunos
           WHERE ($2::text IS NULL OR status = $2)
             AND ($3::text IS NULL OR nome ILIKE '%'||$3||'%')
@@ -426,11 +447,16 @@ export function billingRoutes(app: FastifyInstance, ctx: Context) {
         [config.BILLING_DUE_DAY, q.q ?? null],
       );
       const { competencia, ...contagem } = resumo;
-      // Valor só para o gestor; para o professor o campo nem aparece.
-      const data =
-        r.account.role === "admin"
-          ? lista.data
-          : lista.data.map(({ valor: _valor, ...item }: Record<string, unknown>) => item);
+      // Valores só para o gestor; para o professor os campos nem aparecem.
+      if (r.account.role === "admin")
+        return {
+          ...lista,
+          competencia,
+          resumo: contagem,
+          // sugestão para "Gerar cobrança" quando o mês ainda não tem cobrança
+          valor_padrao: config.BILLING_AMOUNT,
+        };
+      const data = lista.data.map(({ valor: _valor, ...item }: Record<string, unknown>) => item);
       return { ...lista, data, competencia, resumo: contagem };
     },
   );

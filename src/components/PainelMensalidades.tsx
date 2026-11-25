@@ -24,6 +24,8 @@ import {
   CheckCircle2,
   CircleAlert,
   ExternalLink,
+  FilePlus2,
+  Flag,
   HandCoins,
   LoaderCircle,
   MessageCircle,
@@ -34,6 +36,7 @@ import type {
   BaixaMensalidade,
   BaixaMensalidadeInput,
   CobrancaWhatsApp,
+  Financeiro,
   MensalidadePainelItem,
   MetodoPagamento,
   PainelMensalidades as Painel,
@@ -65,7 +68,8 @@ const abrirAba = () => {
   return w;
 };
 
-const mesAno = (competencia?: string) => {
+/** "2026-11" → "Novembro de 2026". */
+export const mesAno = (competencia?: string) => {
   if (!competencia) return "";
   const [a, m] = competencia.split("-").map(Number);
   const nome = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
@@ -74,7 +78,8 @@ const mesAno = (competencia?: string) => {
   return nome[0].toUpperCase() + nome.slice(1);
 };
 
-function Badge({ status }: { status: StatusMensalidadePainel }) {
+/** Selo Pago (verde) / Pendente (vermelho). Também usado na área do aluno. */
+export function Badge({ status }: { status: StatusMensalidadePainel }) {
   return status === "pago" ? (
     <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-success/50 bg-success/15 px-3 py-1 text-xs font-bold text-success">
       <CheckCircle2 size={14} aria-hidden="true" /> Pago
@@ -106,6 +111,8 @@ export function PainelMensalidades({
   const [busca, setBusca] = useState("");
   const [baixas, setBaixas] = useState<Baixas>({});
   const [selecionado, setSelecionado] = useState<MensalidadePainelItem>();
+  /** Aluno pendente sem cobrança no mês: modal "Gerar cobrança". */
+  const [gerando, setGerando] = useState<MensalidadePainelItem>();
   const [aviso, setAviso] = useState("");
   /** Pendentes marcados para cobrança: payment_id → nome (vale entre páginas/abas). */
   const [marcados, setMarcados] = useState<Record<string, string>>({});
@@ -415,8 +422,12 @@ export function PainelMensalidades({
       <Loading loading={r.loading && !r.data} error={r.error} />
       <ul role="tabpanel" aria-busy={r.loading} className="mt-4 grid gap-2">
         {itens.map((i) => {
-          const podeBaixar = podeDarBaixa && i.status === "pendente" && !!i.payment_id && !!i.valor;
-          const cobravel = podeCobrar && i.status === "pendente" && !!i.payment_id;
+          const pendente = i.status === "pendente";
+          const podeBaixar = podeDarBaixa && pendente && !!i.payment_id && !!i.valor;
+          // Checkbox SEMPRE presente nos pendentes (gestor); sem cobrança gerada
+          // fica desabilitado até "Gerar cobrança" criar o payment_id.
+          const temCobranca = !!i.payment_id;
+          const podeGerar = podeDarBaixa && pendente && !temCobranca;
           return (
             <li
               key={i.user_id}
@@ -424,21 +435,45 @@ export function PainelMensalidades({
                 i.status === "pago" ? "border-l-success" : "border-l-primary"
               } ${i.recemPago ? "bg-success/10" : "bg-surface-raised"}`}
             >
-              {cobravel && (
+              {podeCobrar && pendente && (
                 // área de toque de 44px em volta do checkbox de 20px
-                <label className="-my-2 -ml-2 grid size-11 shrink-0 cursor-pointer place-items-center">
+                <label
+                  className={`-my-2 -ml-2 grid size-11 shrink-0 place-items-center ${
+                    temCobranca ? "cursor-pointer" : "cursor-not-allowed"
+                  }`}
+                  title={temCobranca ? undefined : "Gere a cobrança do mês para poder cobrar."}
+                >
                   <input
                     type="checkbox"
-                    checked={!!marcados[i.payment_id!]}
+                    checked={temCobranca && !!marcados[i.payment_id!]}
+                    disabled={!temCobranca}
                     onChange={(e) => marcar(i.payment_id!, i.nome, e.target.checked)}
-                    aria-label={`Selecionar ${i.nome} para cobrança`}
-                    className="size-5! p-0! accent-primary"
+                    aria-label={
+                      temCobranca
+                        ? `Selecionar ${i.nome} para cobrança`
+                        : `${i.nome}: gere a cobrança do mês para poder cobrar`
+                    }
+                    className="size-5! p-0! accent-primary disabled:opacity-40"
                   />
                 </label>
               )}
               {/* min-w-28: em telas estreitas (checkbox + selo) o selo desce de linha em vez de esmagar o nome */}
               <div className="min-w-28 flex-1">
-                <p className="truncate font-semibold text-text-main">{i.nome}</p>
+                <p className="flex min-w-0 items-center gap-1.5 font-semibold text-text-main">
+                  {/* Flag de alerta: obrigatória em TODO pendente, para qualquer papel. */}
+                  {pendente && (
+                    <Flag
+                      data-flag="pendente"
+                      size={15}
+                      className="shrink-0 fill-primary-strong text-primary"
+                      aria-label="Mensalidade pendente"
+                      role="img"
+                    />
+                  )}
+                  <span className="truncate" title={i.nome}>
+                    {i.nome}
+                  </span>
+                </p>
                 <p className="mt-0.5 text-xs text-text-muted">
                   Vence em {day(i.data_vencimento)}
                   {!i.cobranca_gerada && " · cobrança ainda não gerada"}
@@ -464,6 +499,19 @@ export function PainelMensalidades({
                   className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-full bg-primary-strong px-4 text-sm font-bold text-text-main transition hover:brightness-110 focus-visible:outline-primary sm:w-auto"
                 >
                   <HandCoins size={16} aria-hidden="true" /> Dar baixa
+                </button>
+              )}
+              {podeGerar && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAviso("");
+                    setGerando(i);
+                  }}
+                  aria-label={`Gerar a cobrança do mês de ${i.nome}`}
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-full border border-primary/60 px-4 text-sm font-bold text-text-main transition hover:bg-primary-strong/20 focus-visible:outline-primary sm:w-auto"
+                >
+                  <FilePlus2 size={16} aria-hidden="true" /> Gerar cobrança
                 </button>
               )}
             </li>
@@ -496,6 +544,22 @@ export function PainelMensalidades({
             // pago não se cobra: sai da seleção
             marcar(res.mensalidade.payment_id, selecionado.nome, false);
             setSelecionado(undefined);
+            onBaixa?.();
+          }}
+        />
+      )}
+      {gerando && (
+        <GerarCobranca
+          key={gerando.user_id}
+          item={gerando}
+          valorPadrao={r.data?.valor_padrao}
+          onClose={() => setGerando(undefined)}
+          onSucesso={(f) => {
+            setAviso(
+              `Cobrança gerada: ${gerando.nome}, ${brl(f.valor)} com vencimento em ${day(f.data_vencimento)}.`,
+            );
+            setGerando(undefined);
+            r.reload(); // o cartão volta com payment_id: checkbox e "Dar baixa" liberados
             onBaixa?.();
           }}
         />
@@ -650,6 +714,154 @@ function ConfirmarBaixa({
             <CheckCircle2 size={20} aria-hidden="true" />
           )}
           Confirmar Recebimento
+        </button>
+      </form>
+    </dialog>
+  );
+}
+
+/**
+ * Gera a cobrança do mês para um aluno que aparece como pendente sem cobrança
+ * (POST /mensalidades, só gestor). Valor sugerido: BILLING_AMOUNT; vencimento
+ * sugerido: o previsto que o painel já mostra. Ambos editáveis.
+ */
+function GerarCobranca({
+  item,
+  valorPadrao,
+  onClose,
+  onSucesso,
+}: {
+  item: MensalidadePainelItem;
+  valorPadrao?: string;
+  onClose: () => void;
+  onSucesso: (f: Financeiro) => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [valor, setValor] = useState((valorPadrao ?? "").replace(".", ","));
+  const [vencimento, setVencimento] = useState(item.data_vencimento);
+  const [enviando, setEnviando] = useState(false);
+  const [falha, setFalha] = useState("");
+
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+  }, []);
+
+  let normalizado = "";
+  let invalido = "";
+  try {
+    normalizado = amount(valor.trim());
+    if (normalizado === "0.00") invalido = "O valor precisa ser maior que zero.";
+  } catch (e) {
+    invalido = errorMessage(e);
+  }
+  if (!invalido && !/^\d{4}-\d{2}-\d{2}$/.test(vencimento)) invalido = "Informe o vencimento.";
+
+  async function gerar(e: FormEvent) {
+    e.preventDefault();
+    if (invalido || enviando) return;
+    setEnviando(true);
+    setFalha("");
+    try {
+      onSucesso(
+        await api<Financeiro>("/mensalidades", {
+          method: "POST",
+          body: { user_id: item.user_id, valor: normalizado, data_vencimento: vencimento },
+        }),
+      );
+    } catch (err) {
+      setFalha(errorMessage(err));
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => e.target === ref.current && !enviando && onClose()}
+      aria-labelledby="gerar-titulo"
+      className="m-0 mt-auto max-h-[92dvh] w-full max-w-none overflow-y-auto rounded-t-3xl border border-border bg-surface p-0 text-text-main backdrop:bg-secondary/75 backdrop:backdrop-blur-sm sm:m-auto sm:w-[min(440px,calc(100%-2rem))] sm:rounded-3xl"
+    >
+      <form
+        onSubmit={(e) => void gerar(e)}
+        className="flex flex-col gap-4 p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:p-7"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-bold tracking-[0.2em] text-text-muted uppercase">
+              Cobrança do mês
+            </p>
+            <h2
+              id="gerar-titulo"
+              className="mt-1 font-display text-2xl leading-tight font-black uppercase italic"
+            >
+              Gerar cobrança para {item.nome}
+            </h2>
+            <p className="mt-1 text-sm text-text-muted">
+              Depois de gerada, dá para cobrar pelo WhatsApp e dar baixa.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={enviando}
+            aria-label="Fechar"
+            className="grid size-11 shrink-0 place-items-center rounded-full text-text-muted transition hover:bg-surface-raised hover:text-text-main"
+          >
+            <X size={22} />
+          </button>
+        </div>
+
+        <label className="grid gap-1.5 text-sm font-semibold">
+          Valor (R$)
+          <input
+            value={valor}
+            onChange={(e) => setValor(e.target.value)}
+            inputMode="decimal"
+            autoComplete="off"
+            autoFocus
+            aria-invalid={!!invalido}
+            aria-describedby="gerar-ajuda"
+            className="h-12 rounded-xl text-lg tabular-nums"
+          />
+        </label>
+        <label className="grid gap-1.5 text-sm font-semibold">
+          Vencimento
+          <input
+            type="date"
+            value={vencimento}
+            onChange={(e) => setVencimento(e.target.value)}
+            className="h-12 rounded-xl"
+          />
+        </label>
+        <p
+          id="gerar-ajuda"
+          className={`-mt-2 text-xs ${invalido ? "text-primary-soft" : "text-text-muted"}`}
+        >
+          {invalido || `Será cobrado ${brl(normalizado)} com vencimento em ${day(vencimento)}.`}
+        </p>
+
+        {falha && (
+          <p
+            role="alert"
+            className="rounded-xl border border-primary/60 bg-primary-strong/15 px-4 py-3 text-sm"
+          >
+            {falha}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={enviando || !!invalido}
+          className="inline-flex h-13 items-center justify-center gap-2 rounded-full bg-primary-strong px-6 text-base font-bold text-text-main transition hover:brightness-110 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {enviando ? (
+            <LoaderCircle size={20} className="animate-spin" aria-hidden="true" />
+          ) : (
+            <FilePlus2 size={20} aria-hidden="true" />
+          )}
+          Gerar cobrança
         </button>
       </form>
     </dialog>

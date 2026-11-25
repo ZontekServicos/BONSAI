@@ -5,10 +5,12 @@ import { Avatar, BotaoEditarPerfil, alturaTexto, pesoTexto } from "./Perfil";
 
 // Modal carregado só quando o aluno abre (traz o Zod e o tratamento de imagem).
 const EditarPerfil = lazy(() => import("./EditarPerfil"));
+import { Badge, mesAno } from "./PainelMensalidades";
 import type {
   Aluno,
   Carteirinha,
   Financeiro,
+  MensalidadeAtual,
   Attendance,
   GraduacaoHistorico,
   LojaVenda,
@@ -43,6 +45,8 @@ export function Member() {
   };
   const profile = useResource<Aluno>("/me/perfil", revision);
   const payments = useResource<Financeiro[]>("/me/mensalidades", revision);
+  // Mês atual com a MESMA regra do painel do gestor (pendente até entrar no caixa).
+  const atual = useResource<MensalidadeAtual | null>("/me/mensalidades/atual", revision);
   const ranks = useResource<GraduacaoHistorico[]>("/me/graduacoes", revision);
   const [page, setPage] = useState(1);
   const [purchasePage, setPurchasePage] = useState(1);
@@ -162,9 +166,7 @@ export function Member() {
               </div>
               <div>
                 <span>GRADUAÇÃO</span>
-                <strong>
-                  {graduacaoTexto(profile.data.perfil)}
-                </strong>
+                <strong>{graduacaoTexto(profile.data.perfil)}</strong>
               </div>
               <div>
                 <span>PRESENÇAS</span>
@@ -218,22 +220,27 @@ export function Member() {
       </Card>
       <div id="minhas-mensalidades">
         <Card title="Minhas mensalidades">
+          <Loading {...atual} />
+          {atual.data && <MesAtual m={atual.data} />}
           <Loading {...payments} />
-          <Table
-            headers={["Vencimento", "Valor", "Status", "Pagamento"]}
-            empty={payments.data?.length === 0}
-          >
-            {payments.data?.map((p) => (
-              <tr key={p.payment_id}>
-                <td>{day(p.data_vencimento)}</td>
-                <td>{brl(p.valor)}</td>
-                <td>
-                  <Status value={p.status} />
-                </td>
-                <td>{p.data_pagamento ? day(p.data_pagamento) : "—"}</td>
-              </tr>
-            ))}
-          </Table>
+          {payments.data?.length === 0 ? (
+            <p className="text-sm text-text-muted">
+              Histórico: nenhuma cobrança lançada pela academia ainda.
+            </p>
+          ) : (
+            <Table headers={["Vencimento", "Valor", "Status", "Pagamento"]} empty={false}>
+              {payments.data?.map((p) => (
+                <tr key={p.payment_id}>
+                  <td>{day(p.data_vencimento)}</td>
+                  <td>{brl(p.valor)}</td>
+                  <td>
+                    <Status value={p.status} />
+                  </td>
+                  <td>{p.data_pagamento ? day(p.data_pagamento) : "—"}</td>
+                </tr>
+              ))}
+            </Table>
+          )}
         </Card>
       </div>
       <Card title="Minhas presenças">
@@ -278,5 +285,39 @@ export function Member() {
         <Pager page={purchasePage} total={purchases.data?.total ?? 0} onPage={setPurchasePage} />
       </Card>
     </>
+  );
+}
+
+/** Data (fuso de São Paulo) de um timestamp ISO. */
+const diaSP = (iso: string) =>
+  new Date(iso).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+
+/**
+ * Situação do mês atual, igual à linha do aluno no painel do gestor:
+ * "pendente" até existir a entrada no caixa, inclusive sem cobrança lançada.
+ */
+function MesAtual({ m }: { m: MensalidadeAtual }) {
+  const pago = m.status === "pago";
+  return (
+    <section
+      aria-label="Mensalidade do mês atual"
+      className={`mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-2xl border border-l-4 border-border bg-surface-raised px-4 py-4 ${
+        pago ? "border-l-success" : "border-l-primary"
+      }`}
+    >
+      <div className="min-w-0">
+        <p className="text-[10px] font-extrabold tracking-[0.14em] text-text-muted uppercase">
+          Mês atual · {mesAno(m.competencia)}
+        </p>
+        <p className="mt-1 text-base font-semibold text-text-main">
+          {m.valor ? brl(m.valor) : "Valor a confirmar na recepção"}
+        </p>
+        <p className="mt-0.5 text-xs text-text-muted">
+          {pago && m.pago_em ? `Pago em ${diaSP(m.pago_em)}` : `Vence em ${day(m.data_vencimento)}`}
+          {!m.cobranca_gerada && " · cobrança ainda não lançada pela academia"}
+        </p>
+      </div>
+      <Badge status={m.status} />
+    </section>
   );
 }

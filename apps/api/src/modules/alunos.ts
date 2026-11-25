@@ -52,7 +52,7 @@ function validarPromocao(
     );
   return colunasGraduacao({ modalidade: "boxe", nivel: b.nivel_novo });
 }
-import { generateMonths, situation } from "./billing.js";
+import { generateMonths, situacaoDoMes, situation } from "./billing.js";
 
 export async function aluno(db: DB, id: string) {
   return found(await one(db, `${alunoSQL} WHERE u.id=$1`, [id]));
@@ -314,13 +314,34 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
     async (r, _s, _b, q) =>
       db.transaction(async (tx) => {
         await situation(tx, r.account.id, config);
+        // Mesma regra do painel do gestor: "pago" só com a entrada 'mensalidade'
+        // no cash_flow. Sem ela a cobrança é pendente (ou atrasada, se venceu),
+        // mesmo que financeiro.status diga outra coisa.
         return (
           await tx.query(
-            "SELECT * FROM financeiro WHERE user_id=$1 AND ($2::payment_status IS NULL OR status=$2) ORDER BY data_vencimento DESC",
+            `SELECT * FROM (
+               SELECT f.payment_id, f.user_id, f.valor, f.data_vencimento, f.created_at, f.updated_at,
+                      CASE WHEN c.transaction_id IS NOT NULL THEN 'pago'
+                           WHEN f.data_vencimento < fn_hoje_sp() THEN 'atrasado'
+                           ELSE 'pendente' END::payment_status AS status,
+                      CASE WHEN c.transaction_id IS NOT NULL THEN f.data_pagamento END AS data_pagamento,
+                      CASE WHEN c.transaction_id IS NOT NULL THEN f.metodo_pagamento END AS metodo_pagamento
+                 FROM financeiro f
+                 LEFT JOIN cash_flow c
+                   ON c.payment_id = f.payment_id AND c.tipo = 'entrada' AND c.categoria = 'mensalidade'
+                WHERE f.user_id = $1
+             ) m
+             WHERE ($2::payment_status IS NULL OR m.status = $2)
+             ORDER BY m.data_vencimento DESC`,
             [r.account.id, q.status ?? null],
           )
         ).rows;
       }),
+  );
+  // Situação do mês atual, idêntica à do painel do gestor (situacaoDoMes usa a
+  // mesma consulta): aparece "pendente" mesmo sem cobrança gerada no mês.
+  route(app, ctx, "GET", "/me/mensalidades/atual", { role: "aluno" }, (r) =>
+    situacaoDoMes(db, config, r.account.id),
   );
   route(
     app,
