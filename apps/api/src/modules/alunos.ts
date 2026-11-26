@@ -74,6 +74,8 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
         status: z.enum(["ativo", "inativo", "inadimplente"]).optional(),
         faixa: text(40).optional(),
         sort: z.enum(["nome", "data_matricula"]).default("nome"),
+        // só os alunos vinculados à turma (lista de chamada)
+        turma_id: uuid.optional(),
       }),
     },
     async (_r, _s, _b, q) =>
@@ -81,8 +83,9 @@ export function alunosRoutes(app: FastifyInstance, ctx: Context) {
         db,
         `${alunoSQL} WHERE ($1::text IS NULL OR u.nome ILIKE '%'||$1||'%' OR u.email::text ILIKE '%'||$1||'%')
       AND ($2::modalidade IS NULL OR p.modalidade=$2) AND ($3::user_status IS NULL OR u.status=$3)
-      AND ($4::text IS NULL OR p.faixa=$4) ORDER BY ${q.sort === "nome" ? "u.nome" : "p.data_matricula"},u.id`,
-        [q.q ?? null, q.modalidade ?? null, q.status ?? null, q.faixa ?? null],
+      AND ($4::text IS NULL OR p.faixa=$4)
+      AND ($5::uuid IS NULL OR EXISTS (SELECT 1 FROM turma_alunos ta WHERE ta.turma_id=$5 AND ta.user_id=u.id)) ORDER BY ${q.sort === "nome" ? "u.nome" : "p.data_matricula"},u.id`,
+        [q.q ?? null, q.modalidade ?? null, q.status ?? null, q.faixa ?? null, q.turma_id ?? null],
         { page: q.page, page_size: q.page_size },
       ),
   );

@@ -111,6 +111,7 @@ beforeAll(async () => {
   await db.query(await readFile("database/migrations/0007_convites.sql", "utf8"));
   await db.query(await readFile("database/migrations/0008_perfil_aluno.sql", "utf8"));
   await db.query(await readFile("database/migrations/0009_loja_catalogo.sql", "utf8"));
+  await db.query(await readFile("database/migrations/0010_turmas.sql", "utf8"));
   app = await buildApp(config, db, { logger: false, stream: false });
   await app.ready();
   passwordHash = await hashPassword(password);
@@ -1218,6 +1219,9 @@ describe("migrations", () => {
       // 0008 publicada em ef093ad
       "migrations/0008_perfil_aluno.sql":
         "1162c62a2a9bdc1583e9336afacfd45c0909a3717d0ab3d38246a23a1e59b9f1",
+      // 0009 publicada em 2a3ae6d
+      "migrations/0009_loja_catalogo.sql":
+        "bb83a8bf49e7835befe69399a5b27752798f1fd91355dbd225099893db0f617f",
     };
     for (const [name, sum] of Object.entries(published)) {
       const raw = (await readFile(`database/${name}`, "utf8")).replace(/\r\n/g, "\n");
@@ -2542,5 +2546,232 @@ describe("student billing mirrors the admin panel", () => {
     const prof = await request("GET", "/financeiro/mensalidades", undefined, professorToken);
     expect(prof.statusCode).toBe(200);
     expect(prof.json()).not.toHaveProperty("valor_padrao");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Turmas (0010) e chamada por turma
+// ---------------------------------------------------------------------------
+describe("classes and roll call (turmas / chamada)", () => {
+  let professor: string;
+  let professorToken: string;
+  const alunos: Record<string, string> = {};
+  const novaTurma = (body: Record<string, unknown>, token = adminToken) =>
+    request("POST", "/turmas", body, token);
+  const chamada = (id: string, presentes: string[], token = adminToken) =>
+    request("POST", `/turmas/${id}/chamada`, { presentes }, token);
+  const presencas = async (user_id: string) =>
+    (await one(db, "SELECT total_presencas FROM aluno_profile WHERE user_id=$1", [user_id]))
+      .total_presencas as number;
+  const registros = async (user_id: string) =>
+    (
+      await db.query("SELECT turma_id FROM attendance WHERE user_id=$1 ORDER BY check_in", [
+        user_id,
+      ])
+    ).rows.map((r) => r.turma_id as string | null);
+
+  beforeEach(async () => {
+    professor = await user("prof.turma@example.test", "professor");
+    professorToken = (
+      await request("POST", "/auth/login", { email: "prof.turma@example.test", password }, "")
+    ).json().access_token;
+    for (const k of ["ana", "bia", "caio", "fora"]) alunos[k] = await user(`${k}@turma.test`);
+  });
+
+  it("creates a class with members, lists it and filters students by class", async () => {
+    const res = await novaTurma({
+      nome: "Iniciantes Manhã",
+      horario: "Seg, Qua e Sex · 7h",
+      modalidade: "jiu_jitsu",
+      professor_id: professor,
+      alunos: [alunos.ana, alunos.bia],
+    });
+    expect(res.statusCode).toBe(201);
+    const turma = res.json();
+    expect(turma).toMatchObject({
+      nome: "Iniciantes Manhã",
+      horario: "Seg, Qua e Sex · 7h",
+      modalidade: "jiu_jitsu",
+      professor_id: professor,
+      ativa: true,
+      total_alunos: 2,
+    });
+    const lista = (await request("GET", "/turmas", undefined, professorToken)).json();
+    expect(lista.map((t: { id: string }) => t.id)).toContain(turma.id);
+    const detalhe = (await request("GET", `/turmas/${turma.id}`)).json();
+    expect(detalhe.alunos.map((a: { user_id: string }) => a.user_id).sort()).toEqual(
+      [alunos.ana, alunos.bia].sort(),
+    );
+    // GET /alunos?turma_id= traz só quem é da turma
+    const filtrados = (await request("GET", `/alunos?turma_id=${turma.id}&page_size=100`)).json();
+    expect(filtrados.data.map((a: { id: string }) => a.id).sort()).toEqual(
+      [alunos.ana, alunos.bia].sort(),
+    );
+    // nome repetido entre turmas ativas (sem diferenciar maiúsculas/espaços)
+    const repetida = await novaTurma({ nome: "  iniciantes manhã " });
+    expect(repetida.statusCode).toBe(409);
+    expect(repetida.json().error.code).toBe("TURMA_JA_EXISTE");
+    // professor precisa ser da equipe; membro precisa ser aluno
+    expect((await novaTurma({ nome: "Turma X", professor_id: alunos.ana })).json().error.code).toBe(
+      "PROFESSOR_INVALIDO",
+    );
+    const naoAluno = await novaTurma({ nome: "Turma Y", alunos: [professor] });
+    expect(naoAluno.statusCode).toBe(400);
+    expect(naoAluno.json().error.code).toBe("ALUNO_INVALIDO");
+    expect((await request("GET", "/turmas")).json()).toHaveLength(1); // nada criado nas falhas
+  });
+
+  it("edits the class and the change shows up on the roll call", async () => {
+    const turma = (
+      await novaTurma({ nome: "Jiu-Jitsu 19h", horario: "Ter e Qui · 19h", alunos: [alunos.ana] })
+    ).json();
+    const editada = await request("PATCH", `/turmas/${turma.id}`, {
+      nome: "Jiu-Jitsu 20h",
+      horario: "Ter e Qui · 20h",
+      professor_id: professor,
+    });
+    expect(editada.statusCode).toBe(200);
+    expect(editada.json()).toMatchObject({
+      nome: "Jiu-Jitsu 20h",
+      horario: "Ter e Qui · 20h",
+      professor_id: professor,
+    });
+    const lista = (
+      await request("GET", `/turmas/${turma.id}/chamada`, undefined, professorToken)
+    ).json();
+    expect(lista.turma).toMatchObject({ nome: "Jiu-Jitsu 20h", horario: "Ter e Qui · 20h" });
+    expect(lista.data).toBe(todaySP());
+    // null limpa o horário; campo ausente não mexe
+    expect((await request("PATCH", `/turmas/${turma.id}`, { horario: null })).json()).toMatchObject(
+      {
+        nome: "Jiu-Jitsu 20h",
+        horario: null,
+      },
+    );
+    expect((await request("PATCH", `/turmas/${turma.id}`, {})).statusCode).toBe(400);
+    // desativada: some da lista e não aceita chamada
+    await request("PATCH", `/turmas/${turma.id}`, { ativa: false });
+    expect((await request("GET", "/turmas")).json()).toHaveLength(0);
+    expect((await request("GET", "/turmas?incluir_inativas=true")).json()).toHaveLength(1);
+    expect((await chamada(turma.id, [alunos.ana])).json().error.code).toBe("TURMA_INATIVA");
+  });
+
+  it("adds and removes members idempotently", async () => {
+    const turma = (await novaTurma({ nome: "Muay Thai 18h", alunos: [alunos.ana] })).json();
+    const add = await request("POST", `/turmas/${turma.id}/alunos`, {
+      user_ids: [alunos.ana, alunos.bia],
+    });
+    expect(add.json()).toEqual({ adicionados: 1, ja_na_turma: 1 });
+    expect(
+      (await request("POST", `/turmas/${turma.id}/alunos`, { user_ids: [alunos.bia, alunos.bia] }))
+        .statusCode,
+    ).toBe(400);
+    expect((await request("DELETE", `/turmas/${turma.id}/alunos/${alunos.ana}`)).statusCode).toBe(
+      204,
+    );
+    expect((await request("DELETE", `/turmas/${turma.id}/alunos/${alunos.ana}`)).statusCode).toBe(
+      404,
+    );
+    expect((await request("GET", `/turmas/${turma.id}`)).json().total_alunos).toBe(1);
+  });
+
+  it("records the roll call in attendance once per class per day", async () => {
+    const turma = (
+      await novaTurma({ nome: "Turma Chamada", alunos: [alunos.ana, alunos.bia, alunos.caio] })
+    ).json();
+    const r1 = await chamada(turma.id, [alunos.ana, alunos.bia], professorToken);
+    expect(r1.statusCode).toBe(200);
+    expect(r1.json().registrados.sort()).toEqual([alunos.ana, alunos.bia].sort());
+    expect(await registros(alunos.ana)).toEqual([turma.id]);
+    expect(await presencas(alunos.ana)).toBe(1);
+    // reenviar a mesma chamada não duplica
+    const r2 = (await chamada(turma.id, [alunos.ana, alunos.bia, alunos.caio])).json();
+    expect(r2.ja_presentes.sort()).toEqual([alunos.ana, alunos.bia].sort());
+    expect(r2.registrados).toEqual([alunos.caio]);
+    expect(await registros(alunos.ana)).toHaveLength(1);
+    expect(await presencas(alunos.ana)).toBe(1);
+    // a lista da chamada mostra quem já está presente hoje
+    const lista = (await request("GET", `/turmas/${turma.id}/chamada`)).json();
+    expect(lista.alunos.every((a: { presente_hoje: boolean }) => a.presente_hoje)).toBe(true);
+    // aluno que não é da turma
+    const fora = await chamada(turma.id, [alunos.fora]);
+    expect(fora.statusCode).toBe(400);
+    expect(fora.json().error.code).toBe("ALUNO_FORA_DA_TURMA");
+    expect(await registros(alunos.fora)).toEqual([]);
+  });
+
+  it("links today's walk-in check-in instead of counting twice, and blocks delinquent students", async () => {
+    const turma = (
+      await novaTurma({ nome: "Turma Regras", alunos: [alunos.ana, alunos.bia, alunos.caio] })
+    ).json();
+    // ana passou o QR na recepção antes da aula
+    expect((await request("POST", "/presencas/check-in", { user_id: alunos.ana })).statusCode).toBe(
+      201,
+    );
+    expect(await presencas(alunos.ana)).toBe(1);
+    // bia está inadimplente (vencida há 10 dias, carência 5)
+    await debt(alunos.bia, 10);
+    // a lista da chamada já avisa (situação calculada agora, não users.status antigo)
+    const antes = (await request("GET", `/turmas/${turma.id}/chamada`)).json();
+    expect(antes.alunos.find((a: { user_id: string }) => a.user_id === alunos.bia).status).toBe(
+      "inadimplente",
+    );
+    expect((await one(db, "SELECT status FROM users WHERE id=$1", [alunos.bia])).status).toBe(
+      "ativo",
+    ); // prova de que o status gravado ainda estava desatualizado
+    // caio está com sessão aberta de outra turma
+    const outra = (await novaTurma({ nome: "Turma Anterior", alunos: [alunos.caio] })).json();
+    expect((await chamada(outra.id, [alunos.caio])).json().registrados).toEqual([alunos.caio]);
+
+    const res = (await chamada(turma.id, [alunos.ana, alunos.bia, alunos.caio])).json();
+    expect(res.vinculados).toEqual([alunos.ana]);
+    expect(res.bloqueados).toEqual([{ user_id: alunos.bia, status: "inadimplente" }]);
+    expect(res.em_outra_turma).toEqual([alunos.caio]);
+    expect(res.registrados).toEqual([]);
+    expect(await registros(alunos.ana)).toEqual([turma.id]); // o check-in avulso virou desta turma
+    expect(await presencas(alunos.ana)).toBe(1); // sem contar duas vezes
+    expect(await registros(alunos.bia)).toEqual([]);
+  });
+
+  it("keeps management admin-only and the roll call staff-only", async () => {
+    const turma = (await novaTurma({ nome: "Turma RBAC", alunos: [alunos.ana] })).json();
+    expect((await novaTurma({ nome: "Prof cria" }, professorToken)).statusCode).toBe(403);
+    expect(
+      (await request("PATCH", `/turmas/${turma.id}`, { nome: "Outro" }, professorToken)).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await request(
+          "POST",
+          `/turmas/${turma.id}/alunos`,
+          { user_ids: [alunos.bia] },
+          professorToken,
+        )
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await request(
+          "DELETE",
+          `/turmas/${turma.id}/alunos/${alunos.ana}`,
+          undefined,
+          professorToken,
+        )
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (await request("GET", `/turmas/${turma.id}/chamada`, undefined, professorToken)).statusCode,
+    ).toBe(200);
+    for (const [verb, path, body] of [
+      ["GET", "/turmas", undefined],
+      ["GET", `/turmas/${turma.id}/chamada`, undefined],
+      ["POST", `/turmas/${turma.id}/chamada`, { presentes: [alunos.ana] }],
+    ] as const) {
+      expect((await request(verb, path, body, studentToken)).statusCode, `${verb} ${path}`).toBe(
+        403,
+      );
+      expect((await request(verb, path, body, "")).statusCode, `${verb} ${path}`).toBe(401);
+    }
+    expect((await request("GET", `/turmas/${randomUUID()}`)).statusCode).toBe(404);
   });
 });

@@ -13,6 +13,7 @@ import type {
 } from "../types/contract";
 import { MODALIDADE_COM_FAIXA } from "../types/contract";
 import { Avatar, alturaTexto, pesoTexto } from "./Perfil";
+import { Chamada } from "./Chamada";
 import { api, errorMessage } from "../lib/api";
 import {
   Card,
@@ -114,8 +115,8 @@ function Convites({ onClose }: { onClose: () => void }) {
       }
     >
       <p>
-        O aluno recebe um link de uso único, válido por 7 dias, e preenche a ficha completa
-        (dados, saúde, responsável se for menor e termo). A conta é criada com o e-mail convidado.
+        O aluno recebe um link de uso único, válido por 7 dias, e preenche a ficha completa (dados,
+        saúde, responsável se for menor e termo). A conta é criada com o e-mail convidado.
       </p>
       <Form
         fields={[
@@ -143,7 +144,12 @@ function Convites({ onClose }: { onClose: () => void }) {
           <div className="modal-fields">
             <label className="full">
               Link para {criado.email_destinatario} · válido até {day(criado.data_expiracao)}
-              <input id="convite-url" readOnly value={criado.url} onFocus={(e) => e.target.select()} />
+              <input
+                id="convite-url"
+                readOnly
+                value={criado.url}
+                onFocus={(e) => e.target.select()}
+              />
             </label>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -573,7 +579,14 @@ function StudentDetail({
     </>
   );
 }
-export function Presence({ tick }: { tick: number }) {
+export function Presence({
+  tick,
+  podeEditarTurma = false,
+}: {
+  tick: number;
+  /** Gestor: edita a turma direto da chamada. */
+  podeEditarTurma?: boolean;
+}) {
   const r = useResource<PresenteAgora[]>("/presencas/ativas", tick);
   const [id, setId] = useState("");
   const [error, setError] = useState("");
@@ -596,6 +609,14 @@ export function Presence({ tick }: { tick: number }) {
   }
   return (
     <>
+      <Chamada
+        tick={tick}
+        podeEditarTurma={podeEditarTurma}
+        onRegistrada={() => {
+          r.reload();
+          h.reload();
+        }}
+      />
       <Card title="Registrar entrada">
         <StudentPicker value={id} onChange={setId} />
         <Form

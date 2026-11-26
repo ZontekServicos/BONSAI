@@ -19,6 +19,7 @@ import {
   CircleAlert,
   ShieldCheck,
   Store as StoreIcon,
+  UsersRound,
 } from "lucide-react";
 import { DEMO_ACCOUNTS, type DemoProfile } from "./lib/demo-accounts";
 
@@ -34,6 +35,7 @@ import { Finance, Store, Cash } from "./components/Operations";
 import { PainelMensalidades } from "./components/PainelMensalidades";
 import { Member } from "./components/Member";
 import { Loja } from "./components/Loja";
+import { Turmas } from "./components/Turmas";
 
 // Ficha por convite: página pública, carregada só quando aberta (traz o Zod).
 const CadastroPorConvite = lazy(() =>
@@ -307,6 +309,7 @@ type View =
   | "loja"
   | "students"
   | "presence"
+  | "turmas"
   | "finance"
   | "store"
   | "cash"
@@ -316,6 +319,7 @@ const items = [
   { id: "loja", label: "Loja", icon: StoreIcon },
   { id: "students", label: "Alunos", icon: Users },
   { id: "presence", label: "Presença", icon: ClipboardCheck },
+  { id: "turmas", label: "Turmas", icon: UsersRound },
   { id: "finance", label: "Mensalidades", icon: Wallet },
   { id: "store", label: "Loja e estoque", icon: ShoppingBag },
   { id: "cash", label: "Fluxo de caixa", icon: Wallet },
@@ -323,7 +327,7 @@ const items = [
 ] as const;
 /** Telas por papel; a primeira é a inicial. A API aplica o mesmo RBAC. */
 const VIEWS: Record<UserRole, View[]> = {
-  admin: ["dashboard", "students", "presence", "finance", "store", "cash", "password"],
+  admin: ["dashboard", "students", "presence", "turmas", "finance", "store", "cash", "password"],
   professor: ["students", "presence", "finance", "password"],
   aluno: ["dashboard", "loja", "password"],
 };
@@ -526,7 +530,10 @@ function Painel() {
           <>
             {current === "dashboard" && <Dashboard tick={tick} />}
             {current === "students" && <Students canManage={user.role === "admin"} />}
-            {current === "presence" && <Presence tick={tick} />}
+            {current === "presence" && (
+              <Presence tick={tick} podeEditarTurma={user.role === "admin"} />
+            )}
+            {current === "turmas" && <Turmas />}
             {current === "finance" &&
               (user.role === "admin" ? <Finance /> : <PainelMensalidades tick={tick} />)}
             {current === "store" && <Store />}

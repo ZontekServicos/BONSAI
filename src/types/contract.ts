@@ -492,3 +492,57 @@ export interface ApiError {
     details?: unknown;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Turmas (0010) e chamada por turma
+// ---------------------------------------------------------------------------
+
+/** GET /turmas, POST /turmas, PATCH /turmas/:id. */
+export interface Turma {
+  id: UUID;
+  nome: string;
+  /** Texto livre, ex.: "Seg, Qua e Sex · 19h". */
+  horario: string | null;
+  modalidade: Modalidade | null;
+  professor_id: UUID | null;
+  professor_nome: string | null;
+  ativa: boolean;
+  total_alunos: number;
+  created_at: ISOTimestamp;
+  updated_at: ISOTimestamp;
+}
+
+export interface TurmaAluno {
+  user_id: UUID;
+  nome: string;
+  status: UserStatus;
+  modalidade: Modalidade;
+  faixa: string;
+}
+
+/** GET /turmas/:id */
+export interface TurmaDetalhe extends Turma {
+  alunos: (TurmaAluno & { adicionado_em: ISOTimestamp })[];
+}
+
+/** GET /turmas/:id/chamada */
+export interface ChamadaTurma {
+  turma: Turma;
+  /** Dia da chamada (hoje em São Paulo). */
+  data: ISODate;
+  alunos: (TurmaAluno & { presente_hoje: boolean })[];
+}
+
+/** POST /turmas/:id/chamada */
+export interface ResultadoChamada {
+  turma_id: UUID;
+  /** Presença criada agora. */
+  registrados: UUID[];
+  /** Check-in avulso de hoje (QR/recepção) vinculado à turma (não conta duas vezes). */
+  vinculados: UUID[];
+  ja_presentes: UUID[];
+  /** Inadimplente ou inativo: entrada bloqueada, como na recepção. */
+  bloqueados: { user_id: UUID; status: UserStatus }[];
+  /** Ainda com sessão aberta de outra turma (fazer check-out antes). */
+  em_outra_turma: UUID[];
+}

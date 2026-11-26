@@ -19,6 +19,7 @@ import { convitesRoutes } from "./modules/convites.js";
 import { perfilRoutes } from "./modules/perfil.js";
 import { lojaRoutes } from "./modules/loja.js";
 import { notificacoesRoutes } from "./modules/notificacoes.js";
+import { turmasRoutes } from "./modules/turmas.js";
 import { FOTO_MAX_BYTES, FOTO_MIMES } from "../../../src/lib/imagem.js";
 import { presenceStream } from "./stream.js";
 
@@ -96,6 +97,7 @@ export async function buildApp(
       uq_attendance_sessao_aberta: "CHECKIN_JA_ABERTO",
       uq_financeiro_competencia: "MENSALIDADE_DUPLICADA",
       uq_aluno_cpf: "CPF_JA_CADASTRADO",
+      uq_turmas_nome_ativa: "TURMA_JA_EXISTE",
     };
     if (e.code === "23505")
       return reply.code(409).send({
@@ -150,6 +152,7 @@ export async function buildApp(
   perfilRoutes(app, ctx);
   lojaRoutes(app, ctx);
   notificacoesRoutes(app, ctx);
+  turmasRoutes(app, ctx);
   if (options.stream !== false) presenceStream(app, ctx);
   if (config.SERVE_WEB) {
     await app.register(staticFiles, { root: resolve("dist"), prefix: "/", index: "index.html" });

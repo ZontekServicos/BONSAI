@@ -113,6 +113,8 @@ export function PainelMensalidades({
   const [selecionado, setSelecionado] = useState<MensalidadePainelItem>();
   /** Aluno pendente sem cobrança no mês: modal "Gerar cobrança". */
   const [gerando, setGerando] = useState<MensalidadePainelItem>();
+  /** Cartão cujo checkbox foi clicado sem cobrança: mostra o motivo ali. */
+  const [dicaSemCobranca, setDicaSemCobranca] = useState("");
   const [aviso, setAviso] = useState("");
   /** Pendentes marcados para cobrança: payment_id → nome (vale entre páginas/abas). */
   const [marcados, setMarcados] = useState<Record<string, string>>({});
@@ -443,17 +445,29 @@ export function PainelMensalidades({
                   }`}
                   title={temCobranca ? undefined : "Gere a cobrança do mês para poder cobrar."}
                 >
+                  {/*
+                    Sem cobrança o checkbox NÃO usa `disabled` (clique mudo parecia
+                    "flag que não seleciona"): fica aria-disabled e o clique explica
+                    o motivo no próprio cartão e leva ao "Gerar cobrança".
+                  */}
                   <input
                     type="checkbox"
+                    value={i.payment_id ?? ""}
                     checked={temCobranca && !!marcados[i.payment_id!]}
-                    disabled={!temCobranca}
-                    onChange={(e) => marcar(i.payment_id!, i.nome, e.target.checked)}
+                    aria-disabled={!temCobranca}
+                    onChange={(e) => {
+                      if (temCobranca) marcar(i.payment_id!, i.nome, e.target.checked);
+                      else {
+                        setDicaSemCobranca(i.user_id);
+                        document.getElementById(`gerar-${i.user_id}`)?.focus();
+                      }
+                    }}
                     aria-label={
                       temCobranca
                         ? `Selecionar ${i.nome} para cobrança`
                         : `${i.nome}: gere a cobrança do mês para poder cobrar`
                     }
-                    className="size-5! p-0! accent-primary disabled:opacity-40"
+                    className={`size-5! p-0! accent-primary ${temCobranca ? "" : "opacity-40"}`}
                   />
                 </label>
               )}
@@ -486,6 +500,11 @@ export function PainelMensalidades({
                     </>
                   )}
                 </p>
+                {!temCobranca && dicaSemCobranca === i.user_id && (
+                  <p role="status" className="mt-1 text-xs font-semibold text-primary-soft">
+                    Para selecionar {i.nome}, gere antes a cobrança deste mês.
+                  </p>
+                )}
               </div>
               <Badge status={i.status} />
               {podeBaixar && (
@@ -508,6 +527,7 @@ export function PainelMensalidades({
                     setAviso("");
                     setGerando(i);
                   }}
+                  id={`gerar-${i.user_id}`}
                   aria-label={`Gerar a cobrança do mês de ${i.nome}`}
                   className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-full border border-primary/60 px-4 text-sm font-bold text-text-main transition hover:bg-primary-strong/20 focus-visible:outline-primary sm:w-auto"
                 >
