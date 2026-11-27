@@ -14,6 +14,7 @@ import type {
 import { MODALIDADE_COM_FAIXA } from "../types/contract";
 import { Avatar, alturaTexto, pesoTexto } from "./Perfil";
 import { Chamada } from "./Chamada";
+import { BotaoScanner } from "./Scanner";
 import { api, errorMessage } from "../lib/api";
 import {
   Card,
@@ -618,6 +619,15 @@ export function Presence({
         }}
       />
       <Card title="Registrar entrada">
+        {/* Câmera: lê o QR da carteirinha e registra a entrada na hora. */}
+        <div className="mb-5 border-b border-border pb-5">
+          <BotaoScanner
+            onCheckIn={() => {
+              r.reload();
+              h.reload();
+            }}
+          />
+        </div>
         <StudentPicker value={id} onChange={setId} />
         <Form
           fields={[]}

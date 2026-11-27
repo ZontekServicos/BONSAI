@@ -2775,3 +2775,136 @@ describe("classes and roll call (turmas / chamada)", () => {
     expect((await request("GET", `/turmas/${randomUUID()}`)).statusCode).toBe(404);
   });
 });
+
+// ---------------------------------------------------------------------------
+// IMC calculado no servidor + check-in pelo scanner de QR
+// ---------------------------------------------------------------------------
+describe("server-side BMI on the student profile", () => {
+  const medir = (altura: number | null, peso: number | null) =>
+    db.query("UPDATE aluno_profile SET altura=$2, peso=$3 WHERE user_id=$1", [
+      student,
+      altura,
+      peso,
+    ]);
+  const perfil = async () =>
+    (await request("GET", "/me/perfil", undefined, studentToken)).json().perfil;
+
+  it("returns imc = peso / altura², rounded, with the WHO adult class", async () => {
+    // pelo PATCH do próprio aluno: 81 / 1,80² = 25,0
+    const res = await request("PATCH", "/me/perfil", { altura: 1.8, peso: 81 }, studentToken);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().perfil).toMatchObject({ imc: 25, imc_classificacao: "sobrepeso" });
+    for (const [altura, peso, imc, classe] of [
+      [1.75, 53, 17.3, "abaixo_do_peso"],
+      [1.75, 70, 22.9, "normal"],
+      [1.7, 95, 32.9, "obesidade"],
+      // 80,99 / 3,24 = 24,996 → exibido 25,0 → classificado pelo valor exibido
+      [1.8, 80.99, 25, "sobrepeso"],
+      [1.8, 58.31, 18, "abaixo_do_peso"],
+    ] as const) {
+      await medir(altura, peso);
+      expect(await perfil(), `${altura} m, ${peso} kg`).toMatchObject({
+        imc,
+        imc_classificacao: classe,
+      });
+    }
+    // o gestor recebe o mesmo cálculo na ficha do aluno
+    expect((await request("GET", `/alunos/${student}`)).json().perfil).toMatchObject({
+      imc: 18,
+      imc_classificacao: "abaixo_do_peso",
+    });
+  });
+
+  it("returns null without both measures and no adult class for minors", async () => {
+    await medir(1.8, null);
+    expect(await perfil()).toMatchObject({ imc: null, imc_classificacao: null });
+    await medir(null, 70);
+    expect(await perfil()).toMatchObject({ imc: null, imc_classificacao: null });
+    const responsavel = (
+      await one(
+        db,
+        `INSERT INTO responsaveis(nome, parentesco, whatsapp, telefone_emergencia)
+         VALUES ('Resp Teste', 'mae', '5511900001111', '5511900002222') RETURNING id`,
+      )
+    ).id;
+    await db.query(
+      "UPDATE aluno_profile SET data_nascimento=$2, responsavel_id=$3 WHERE user_id=$1",
+      [student, shift(todaySP(), -12), responsavel],
+    );
+    await medir(1.5, 45);
+    expect(await perfil()).toMatchObject({ imc: 20, imc_classificacao: "menor_de_idade" });
+  });
+});
+
+describe("QR scanner check-in (POST /presencas/check-in with qr_token)", () => {
+  const qr = (sub: string, exp: string | number = "90s") =>
+    new SignJWT({ typ: "carteirinha" })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setSubject(sub)
+      .setIssuer("bonsai")
+      .setAudience("bonsai-reception")
+      .setJti(randomUUID())
+      .setIssuedAt()
+      .setExpirationTime(exp)
+      .sign(new TextEncoder().encode(config.JWT_QR_SECRET));
+  const scan = (qr_token: string, token = adminToken) =>
+    request("POST", "/presencas/check-in", { qr_token }, token);
+
+  it("checks the student in from the card's QR and returns who entered", async () => {
+    // QR real gerado pela carteirinha do aluno
+    const { qr_token } = (await request("GET", "/me/carteirinha", undefined, studentToken)).json();
+    const res = await scan(qr_token);
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      user_id: student,
+      check_out: null,
+      aluno: { id: student, nome: "Pessoa Teste", modalidade: "jiu_jitsu" },
+    });
+    expect(res.json().aluno).not.toHaveProperty("email");
+    // ler o mesmo aluno de novo: já está dentro
+    const repetido = await scan(qr_token);
+    expect(repetido.statusCode).toBe(409);
+    expect(repetido.json().error.code).toBe("CHECKIN_JA_ABERTO");
+  });
+
+  it("works for professors too and blocks delinquent students, naming them", async () => {
+    await user("prof.scanner@example.test", "professor");
+    const professorToken = (
+      await request("POST", "/auth/login", { email: "prof.scanner@example.test", password }, "")
+    ).json().access_token;
+    expect((await scan(await qr(student), professorToken)).statusCode).toBe(201);
+    await debt(other, 10);
+    const bloqueado = await scan(await qr(other));
+    expect(bloqueado.statusCode).toBe(403);
+    expect(bloqueado.json().error).toMatchObject({
+      code: "CARTEIRINHA_BLOQUEADA",
+      details: { status: "inadimplente", aluno: { id: other } },
+    });
+    expect((await db.query("SELECT 1 FROM attendance WHERE user_id=$1", [other])).rowCount).toBe(0);
+  });
+
+  it("rejects QRs that are expired, forged or not from a student", async () => {
+    for (const [rotulo, token] of [
+      ["expirado", await qr(student, Math.floor(Date.now() / 1000) - 10)],
+      ["de um gestor", await qr(admin)],
+      ["de ninguém", await qr(randomUUID())],
+      [
+        "assinado com outra chave",
+        await new SignJWT({ typ: "carteirinha" })
+          .setProtectedHeader({ alg: "HS256" })
+          .setSubject(student)
+          .setIssuer("bonsai")
+          .setAudience("bonsai-reception")
+          .setExpirationTime("90s")
+          .sign(new TextEncoder().encode("x".repeat(40))),
+      ],
+      ["texto qualquer", "https://exemplo.com/nao-e-carteirinha"],
+    ] as const) {
+      const res = await scan(token);
+      expect(res.statusCode, rotulo).toBe(400);
+      expect(res.json().error.code, rotulo).toBe("QR_INVALIDO");
+    }
+    expect((await scan(await qr(student), studentToken)).statusCode).toBe(403);
+    expect((await db.query("SELECT 1 FROM attendance")).rowCount).toBe(0);
+  });
+});

@@ -94,6 +94,10 @@ export interface AlunoProfile {
   peso: number | null;
   /** Última vez que o aluno informou/confirmou altura ou peso. */
   medidas_atualizadas_em: ISOTimestamp | null;
+  /** IMC calculado no servidor: peso / altura², 1 casa. null sem altura ou peso. */
+  imc: number | null;
+  /** Faixa OMS (adultos) do IMC arredondado; "menor_de_idade" = referência é a curva por idade. */
+  imc_classificacao: ImcClassificacao | null;
   total_presencas: number;
   data_matricula: ISODate;
 }
@@ -187,6 +191,27 @@ export interface CashFlow {
   /** [EXT] */
   registrado_por: UUID;
 }
+
+export type ImcClassificacao =
+  | "abaixo_do_peso"
+  | "normal"
+  | "sobrepeso"
+  | "obesidade"
+  | "menor_de_idade";
+
+/** Resumo do aluno devolvido pelo check-in (scanner/recepção). */
+export interface AlunoResumo {
+  id: UUID;
+  nome: string;
+  foto_url: string | null;
+  modalidade: Modalidade;
+  faixa: string;
+  graduacao_nivel: number;
+  numero_matricula: number;
+}
+
+/** POST /presencas/check-in: a presença criada + quem entrou. */
+export type CheckInResultado = Attendance & { aluno: AlunoResumo };
 
 export interface Attendance {
   attendance_id: UUID;

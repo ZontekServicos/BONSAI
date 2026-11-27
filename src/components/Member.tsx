@@ -7,6 +7,8 @@ import { Avatar, BotaoEditarPerfil, alturaTexto, pesoTexto } from "./Perfil";
 const EditarPerfil = lazy(() => import("./EditarPerfil"));
 import { Badge, mesAno } from "./PainelMensalidades";
 import type {
+  AlunoProfile,
+  ImcClassificacao,
   Aluno,
   Carteirinha,
   Financeiro,
@@ -124,28 +126,42 @@ export function Member() {
               <span>MEMBRO OFICIAL</span>
             </div>
             <div className="member-main">
-              <button
-                type="button"
-                onClick={abrirEdicao}
-                aria-label="Trocar foto de perfil"
-                className="member-avatar relative shrink-0 overflow-hidden p-0"
-              >
-                <Avatar
-                  nome={profile.data.nome}
-                  foto={profile.data.perfil.foto_url}
-                  className="size-full"
-                />
-                <span className="absolute right-0 bottom-0 grid size-6 place-items-center rounded-tl-lg bg-primary-strong text-text-main">
-                  <Camera size={13} aria-hidden="true" />
-                </span>
-              </button>
-              <div className="min-w-0">
-                <span>ALUNO</span>
-                <div className="flex items-center gap-3">
-                  <h2 className="min-w-0 break-words">{profile.data.nome}</h2>
-                  <BotaoEditarPerfil onClick={abrirEdicao} />
+              {/*
+                Bloco único: foto + nome/lápis e, ao lado da foto, os dados
+                biométricos (altura, peso e, logo abaixo, o IMC calculado pela API).
+                Abaixo de 360px a biometria ocupa a largura toda, sob a foto. Até 720px o
+                bloco ocupa a linha inteira (basis-full) e o QR desce: sem isso o QR
+                dividia a linha e espremia o nome.
+              */}
+              <div className="grid min-w-0 flex-1 grid-cols-[68px_minmax(0,1fr)] items-start gap-x-4 gap-y-3 max-[720px]:basis-full">
+                <button
+                  type="button"
+                  onClick={abrirEdicao}
+                  aria-label="Trocar foto de perfil"
+                  className="member-avatar relative shrink-0 overflow-hidden p-0"
+                >
+                  <Avatar
+                    nome={profile.data.nome}
+                    foto={profile.data.perfil.foto_url}
+                    className="size-full"
+                  />
+                  <span className="absolute right-0 bottom-0 grid size-6 place-items-center rounded-tl-lg bg-primary-strong text-text-main">
+                    <Camera size={13} aria-hidden="true" />
+                  </span>
+                </button>
+                <div className="min-w-0">
+                  <span>ALUNO</span>
+                  <div className="flex items-center gap-3">
+                    <h2 className="min-w-0 break-words">{profile.data.nome}</h2>
+                    <BotaoEditarPerfil onClick={abrirEdicao} />
+                  </div>
+                  <p>Matrícula {profile.data.perfil.numero_matricula}</p>
                 </div>
-                <p>Matrícula {profile.data.perfil.numero_matricula}</p>
+                <Biometria
+                  perfil={profile.data.perfil}
+                  onEditar={abrirEdicao}
+                  className="col-span-2 min-[360px]:col-span-1 min-[360px]:col-start-2"
+                />
               </div>
               {card && (
                 <div className="member-qr">
@@ -174,30 +190,6 @@ export function Member() {
               </div>
             </div>
           </section>
-        )}
-        {profile.data && (
-          <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-2xl border border-border bg-surface-raised px-5 py-4">
-            <div>
-              <small className="block text-[10px] font-extrabold tracking-[0.14em] text-text-muted">
-                ALTURA
-              </small>
-              <strong className="text-lg">{alturaTexto(profile.data.perfil.altura)}</strong>
-            </div>
-            <div>
-              <small className="block text-[10px] font-extrabold tracking-[0.14em] text-text-muted">
-                PESO
-              </small>
-              <strong className="text-lg">{pesoTexto(profile.data.perfil.peso)}</strong>
-            </div>
-            <small className="text-xs text-text-muted">
-              {profile.data.perfil.medidas_atualizadas_em
-                ? `Atualizado em ${day(profile.data.perfil.medidas_atualizadas_em)}`
-                : "Informe sua altura e seu peso."}
-            </small>
-            <button className="secondary ml-auto" type="button" onClick={abrirEdicao}>
-              Editar perfil
-            </button>
-          </div>
         )}
         {profile.data && modalCarregado && (
           <Suspense fallback={null}>
@@ -318,6 +310,95 @@ function MesAtual({ m }: { m: MensalidadeAtual }) {
         </p>
       </div>
       <Badge status={m.status} />
+    </section>
+  );
+}
+
+const IMC_ROTULO: Record<Exclude<ImcClassificacao, "menor_de_idade">, string> = {
+  abaixo_do_peso: "Abaixo do peso",
+  normal: "Peso normal",
+  sobrepeso: "Sobrepeso",
+  obesidade: "Obesidade",
+};
+// Sem alarmismo: só "normal" ganha cor de sucesso; obesidade em vermelho suave.
+const IMC_COR: Record<Exclude<ImcClassificacao, "menor_de_idade">, string> = {
+  abaixo_do_peso: "border-border-strong text-text-main",
+  normal: "border-success/50 bg-success/15 text-success",
+  sobrepeso: "border-border-strong text-text-main",
+  obesidade: "border-primary/60 bg-primary-strong/15 text-primary-soft",
+};
+const umaCasa = (v: number) =>
+  v.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+/**
+ * Dados biométricos na carteirinha: altura, peso e, abaixo, o IMC com a faixa.
+ * O IMC e a faixa vêm prontos da API (perfil.imc / perfil.imc_classificacao).
+ * Usa dl/dt/dd/strong: o CSS legado de .member-main estiliza span e p.
+ */
+function Biometria({
+  perfil,
+  onEditar,
+  className = "",
+}: {
+  perfil: AlunoProfile;
+  onEditar: () => void;
+  className?: string;
+}) {
+  const rotulo = "block text-[9px] font-extrabold tracking-[0.16em] text-text-muted uppercase";
+  const valor = "block text-base font-bold leading-tight text-text-main tabular-nums";
+  const c = perfil.imc_classificacao;
+  return (
+    <section
+      aria-label="Dados biométricos"
+      className={`min-w-0 rounded-xl border border-border bg-surface-raised/70 p-3 ${className}`}
+    >
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
+        <div>
+          <dt className={rotulo}>Altura</dt>
+          <dd className={valor}>{alturaTexto(perfil.altura)}</dd>
+        </div>
+        <div>
+          <dt className={rotulo}>Peso</dt>
+          <dd className={valor}>{pesoTexto(perfil.peso)}</dd>
+        </div>
+        <div className="col-span-2 border-t border-border pt-2">
+          <dt className={rotulo}>IMC</dt>
+          <dd className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <strong className={valor}>{perfil.imc == null ? "—" : umaCasa(perfil.imc)}</strong>
+            {c && c !== "menor_de_idade" && (
+              <strong
+                className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold ${IMC_COR[c]}`}
+              >
+                {IMC_ROTULO[c]}
+              </strong>
+            )}
+          </dd>
+          {c === "menor_de_idade" && (
+            <dd className="mt-1 text-[11px] leading-snug text-text-muted">
+              Menores de 18: avaliar pela curva de crescimento por idade.
+            </dd>
+          )}
+        </div>
+      </dl>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-text-muted">
+        <strong className="font-normal">
+          {perfil.medidas_atualizadas_em
+            ? `Atualizado em ${day(perfil.medidas_atualizadas_em)}`
+            : "Informe sua altura e seu peso."}
+        </strong>
+        <button
+          type="button"
+          onClick={onEditar}
+          className="min-h-8 font-bold text-primary-soft underline-offset-4 hover:underline"
+        >
+          {perfil.altura == null || perfil.peso == null ? "Informar medidas" : "Atualizar"}
+        </button>
+      </div>
+      {perfil.imc != null && c !== "menor_de_idade" && (
+        <strong className="mt-1 block text-[10px] font-normal text-text-muted">
+          IMC: referência OMS para adultos; não substitui avaliação profissional.
+        </strong>
+      )}
     </section>
   );
 }

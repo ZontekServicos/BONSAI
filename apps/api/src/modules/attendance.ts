@@ -35,6 +35,16 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
       fail(400, "QR_INVALIDO", "QR inválido ou expirado.");
     }
   }
+  /** Resumo do aluno para o retorno do check-in (scanner/recepção). */
+  async function alunoResumo(id: string) {
+    return one(
+      db,
+      `SELECT u.id, u.nome, p.foto_url, p.modalidade, p.faixa, p.graduacao_nivel, p.numero_matricula
+         FROM users u JOIN aluno_profile p ON p.user_id = u.id
+        WHERE u.id = $1 AND u.role = 'aluno'`,
+      [id],
+    );
+  }
   async function enter(tx: DB, id: string, actor: string) {
     return one(tx, "INSERT INTO attendance(user_id,registrado_por) VALUES($1,$2) RETURNING *", [
       id,
@@ -114,7 +124,14 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
       ]),
     },
     async (r, reply, b) => {
+      // QR: assinatura, emissor, audiência, tipo e validade (90 s) em decode().
       const id = "user_id" in b ? b.user_id : await decode(b.qr_token);
+      // Identidade: o "sub" do QR precisa ser um aluno que existe.
+      const aluno = await alunoResumo(id);
+      if (!aluno)
+        "user_id" in b
+          ? fail(404, "NAO_ENCONTRADO", "Aluno não encontrado.")
+          : fail(400, "QR_INVALIDO", "Este QR não pertence a um aluno cadastrado.");
       const result = await db.transaction(async (tx) => {
         const s = await situation(tx, id, config);
         if (s.status !== "ativo") return { s };
@@ -125,9 +142,9 @@ export function attendanceRoutes(app: FastifyInstance, ctx: Context) {
           403,
           result.s.status === "inativo" ? "ALUNO_INATIVO" : "CARTEIRINHA_BLOQUEADA",
           "Entrada bloqueada.",
-          result.s,
+          { ...result.s, aluno },
         );
-      return reply.code(201).send(result.attendance);
+      return reply.code(201).send({ ...result.attendance, aluno });
     },
   );
   for (const byUser of [false, true])
